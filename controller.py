@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import QFileDialog
 from PyQt5.QtCore import QThread, pyqtSignal
 from pathlib import Path
+from datetime import datetime
 import os
 import subprocess
 import shutil
@@ -157,8 +158,16 @@ class CopyThread(QThread):
         super().__init__()
         self.source_dir = source_dir
         self.destination_dir = destination_dir
+        self.backup_dir = os.path.join(self.destination_dir, 
+                                       "!Backup_" + self.get_date_time())
+        
+    def get_date_time(self) -> str:
+        """Возвращает дату и время в виде форматированной строки."""
+        current_datetime = datetime.now()
+        return current_datetime.strftime("%d.%m.%Y_%H.%M.%S")
     
     def run(self):
+        """Запускает копирование в потоке."""
         folder = Path(self.source_dir)
         total_files = len(list(folder.rglob("*")))
         copied_files = 0
@@ -169,9 +178,16 @@ class CopyThread(QThread):
                 destination_path = os.path.join(self.destination_dir, 
                                                 os.path.relpath(source_path, 
                                                                 self.source_dir))
+                backup_path = os.path.join(self.backup_dir, 
+                                                os.path.relpath(source_path, 
+                                                                self.source_dir))
                 os.makedirs(os.path.dirname(destination_path), exist_ok = True)
                 try:
                     if not filecmp.cmp(source_path, destination_path, shallow = True):
+                        if not os.path.isdir(self.backup_dir):
+                            os.mkdir(self.backup_dir)
+                        os.makedirs(os.path.dirname(backup_path), exist_ok = True)
+                        shutil.copy2(destination_path, backup_path)
                         shutil.copy2(source_path, destination_path)
                         copied_files += 1
                 except FileNotFoundError:
