@@ -1,0 +1,58 @@
+# Строка строго до 120 символов
+line-length = 120
+# Целевая версия Python для применения современных синтаксических правил
+target-version = "py314"
+# Исключаем стандартные папки сборки и кэша
+exclude = [
+    ".venv",
+    "venv",
+    ".flet",
+    "build",
+    "dist",
+    ".git",
+    ".ai",
+]
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # Pyflakes (ошибки логики, неиспользуемые переменные)
+    "I",    # isort (сортировка импортов)
+    "N",    # pep8-naming (именование классов/функций)
+    "UP",   # pyupgrade (автоматический апгрейд синтаксиса до Python 3.14)
+    "ANN",  # flake8-annotations (строгая проверка аннотаций типов)
+    "ASYNC",# flake8-async (проверка асинхронного кода)
+    "S",    # flake8-bandit (безопасность: запрет eval/exec, проверка секретов)
+    "PTH",  # flake8-use-pathlib (принудительное использование pathlib вместо os.path)
+    "RUF",  # Ruff-specific rules (специфичные полезные проверки от Ruff)
+]
+
+ignore = [
+    # Игнорируем требование аннотаций для __init__, если они очевидны
+    "ANN401", # Разрешаем Any в редких случаях
+    "RUF001",
+    "RUF002",
+]
+
+# Автоматически исправлять безопасные ошибки при запуске `ruff check --fix`
+fixable = ["ALL"]
+unfixable = []
+
+[lint.per-file-ignores]
+# В тестах разрешаем не писать docstrings и не проверять некоторые безопасности
+"tests/**/*.py" = ["S101", "ANN", "D"]
+# В точках входа (main.py) разрешаем отсутствие некоторых аннотаций, если они мешают
+"main.py" = ["ANN"]
+
+[lint.isort]
+known-first-party = ["config", "core", "models", "services", "ui"]
+
+# --- Настройки форматтера Ruff ---
+[format]
+# Используем двойные кавычки для строк
+quote-style = "double"
+# Используем пробелы для отступов
+indent-style = "space"
+# Автоматически определять окончание строк (LF для Linux/Mac, CRLF для Windows)
+line-ending = "auto"

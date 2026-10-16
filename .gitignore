@@ -1,0 +1,71 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Виртуальные окружения ---
+.venv/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Flet & Сборка (flet build) ---
+# Временные файлы сборщика Flet под мобильные и десктопные платформы
+.flet/
+build/
+dist/
+flet_bundle/
+*.apk
+*.aab
+*.ipa
+*.exe
+*.dmg
+
+# --- Настройки среды разработки (IDE) ---
+!/.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/tasks.json
+*.code-workspace
+.idea/
+
+# --- Логи и Базы данных ---
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Переменные окружения (Секреты) ---
+.env
+.env.local
+.env.*.local
+
+# --- AI Ассистенты (Cline / Roo Code) ---
+.cline/
+
+# --- Особенности проекта ---
+reports/
+inspect/inspect_report.txt

@@ -1,0 +1,18 @@
+[project]
+name = "checkcopyrun"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "customtkinter>=6.0.0",
+    "nuitka>=4.3",
+    "pillow>=12.3.0",
+    "pystray>=0.19.5",
+    "pywin32>=312",
+]
+
+[tool.uv]
+# Проект — набор скриптов, а не устанавливаемый пакет:
+# uv только создаёт окружение с зависимостями и запускает файлы из корня.
+package = false

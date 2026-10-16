@@ -1,0 +1,61 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build: Windows EXE (PyInstaller)",
+            "type": "shell",
+            "command": "uv",
+            "args": [
+                "run",
+                "pyinstaller",
+                "--noconsole",
+                "--onefile",
+                "--clean",
+                "--name",
+                "MyGUIApp",
+                "--icon=icon.ico",
+                "main.py"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "dependsOn": [
+                "Lint & Format (Ruff)",
+                "Run Tests (Pytest)"
+            ]
+        },
+        {
+            "label": "Lint & Format (Ruff)",
+            "type": "shell",
+            "command": "uv run ruff check --fix . && uv run ruff format .",
+            "problemMatcher": []
+        },
+        {
+            "label": "Run Tests (Pytest)",
+            "type": "shell",
+            "command": "uv",
+            "args": [
+                "run",
+                "pytest",
+                "-v"
+            ],
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "Clean: Build Artifacts",
+            "type": "shell",
+            "command": "Remove-Item",
+            "args": [
+                "-Recurse",
+                "-Force",
+                "build",
+                "dist",
+                "*.spec"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}
