@@ -1,4 +1,18 @@
-"""Контекстное меню в стиле CustomTkinter."""
+"""Контекстное меню в стиле CustomTkinter.
+
+Оформление повторяет StyledOptionMenu: плашка SURFACE_BG с тонкой
+рамкой SURFACE_BORDER. Каждая строка — фикс-обёртка иконки 24×24
+плюс текстовый label.
+
+Использует tk.Toplevel вместо CTkToplevel — у последнего внутри
+есть canvas, который на некоторых DPI добавляет лишние отступы
+и мешает точному подгону размера окна под содержимое.
+
+Одновременно открыто только одно меню: глобальный трекер
+закрывает предыдущее при показе нового. Это защищает от ситуации,
+когда пользователь открывает меню повторными кликами, а старые
+остаются висеть.
+"""
 
 from __future__ import annotations
 
@@ -40,13 +54,59 @@ _SEPARATOR_PADY = 4
 
 _CURSOR_OFFSET = 4
 _SCREEN_MARGIN = 8
+
 _FOCUS_CHECK_DELAY_MS = 60
+
+_FRAME_BORDER_WIDTH = 1
+
+
+# --- Глобальный трекер активного меню ---
+
+_active_menu: ContextMenu | None = None
+
+
+def _register_active(menu: ContextMenu) -> None:
+    """Регистрирует меню как активное, закрывая предыдущее."""
+    global _active_menu
+    previous = _active_menu
+    _active_menu = menu
+
+    if previous is None or previous is menu:
+        return
+
+    try:
+        previous.close()
+    except Exception as exc:
+        logger.debug("close предыдущего меню: %r", exc)
+
+
+def _unregister_active(menu: ContextMenu) -> None:
+    global _active_menu
+    if _active_menu is menu:
+        _active_menu = None
 
 
 def _separator_hex() -> str:
     if ctk.get_appearance_mode() == "Dark":
         return "#555555"
     return "#c0c0c0"
+
+
+def _background_hex() -> str:
+    """Hex-цвет фона меню под текущую тему (для tk.Toplevel)."""
+    mode = ctk.get_appearance_mode()
+    bg = SURFACE_BG[1] if mode == "Dark" else SURFACE_BG[0]
+    return bg
+
+
+def _get_scaling(widget) -> float:
+    try:
+        value = ctk.ScalingTracker.get_widget_scaling(widget)
+        if value and value > 0:
+            return float(value)
+    except Exception as exc:
+        logger.debug("ScalingTracker.get_widget_scaling: %r", exc)
+    return 1.0
 
 
 class _MenuRow(ctk.CTkFrame):
@@ -69,7 +129,6 @@ class _MenuRow(ctk.CTkFrame):
         )
         self.grid_propagate(False)
         self.grid_columnconfigure(1, weight=1)
-        # Центрирование содержимого по вертикали.
         self.grid_rowconfigure(0, weight=1)
 
         self._command = command
@@ -78,7 +137,6 @@ class _MenuRow(ctk.CTkFrame):
 
         text_color = DANGER_TEXT if danger else SURFACE_TEXT
 
-        # --- Обёртка иконки ---
         icon_wrapper = ctk.CTkFrame(
             self,
             fg_color="transparent",
@@ -100,9 +158,8 @@ class _MenuRow(ctk.CTkFrame):
                 text_color=text_color,
                 font=get_emoji_font(_EMOJI_FONT_SIZE),
             )
-            icon_label.place(relx=0.5, rely=0.5, anchor="center")
+            icon_label.pack(fill="both", expand=True)
 
-        # --- Текст ---
         self._text_label = ctk.CTkLabel(
             self,
             text=text,
@@ -115,7 +172,6 @@ class _MenuRow(ctk.CTkFrame):
             padx=(0, _TEXT_PADX_RIGHT),
         )
 
-        # --- Биндинги ---
         targets = [self, icon_wrapper]
         if icon_label is not None:
             targets.append(icon_label)
@@ -182,7 +238,7 @@ class ContextMenu:
     def __init__(self, parent):
         self._parent = parent
         self._root = parent.winfo_toplevel()
-        self._top: ctk.CTkToplevel | None = None
+        self._top: tk.Toplevel | None = None
         self._items: list[
             tuple[str, str | None, Callable[[], None] | None, bool]
         ] = []
@@ -214,32 +270,48 @@ class ContextMenu:
             logger.debug("ContextMenu.show: пустое меню")
             return
 
-        self.close()
+        # Закрываем предыдущее активное меню (если было). Это
+        # важно: пользователь может открыть ПКМ несколько раз
+        # подряд — старые не должны оставаться на экране.
+        _register_active(self)
 
-        top = ctk.CTkToplevel(self._parent)
+        # Своё собственное состояние на всякий случай тоже чистим:
+        # если этот же объект показывают повторно.
+        self._close_window()
+
+        top = tk.Toplevel(self._parent)
         top.overrideredirect(True)
         try:
             top.attributes("-topmost", True)
         except Exception as exc:
             logger.debug("attributes(-topmost): %r", exc)
+        try:
+            top.configure(bg=_background_hex())
+        except Exception as exc:
+            logger.debug("configure(bg) у Toplevel: %r", exc)
         self._top = top
 
         outer = ctk.CTkFrame(
             top,
             fg_color=SURFACE_BG,
             corner_radius=SURFACE_RADIUS,
-            border_width=1,
+            border_width=_FRAME_BORDER_WIDTH,
             border_color=SURFACE_BORDER,
         )
         outer.pack(fill="both", expand=True)
 
         inner = ctk.CTkFrame(outer, fg_color="transparent")
         inner.pack(
-            fill="both", expand=True,
+            fill="x",
             padx=_FRAME_PAD, pady=_FRAME_PAD,
         )
 
-        for label, icon, command, danger in self._items:
+        last_action_idx: int | None = None
+        for idx, (_, _, command, _) in enumerate(self._items):
+            if command is not None:
+                last_action_idx = idx
+
+        for idx, (label, icon, command, danger) in enumerate(self._items):
             if command is None:
                 sep = tk.Frame(
                     inner,
@@ -256,6 +328,9 @@ class ContextMenu:
                 sep.pack_propagate(False)
                 continue
 
+            is_last_action = (idx == last_action_idx)
+            pady_bottom = 0 if is_last_action else _ITEM_PADY
+
             row = _MenuRow(
                 inner,
                 icon=icon or "",
@@ -263,17 +338,23 @@ class ContextMenu:
                 command=lambda cb=command: self._invoke(cb),
                 danger=danger,
             )
-            row.pack(fill="x", pady=(0, _ITEM_PADY))
+            row.pack(fill="x", pady=(0, pady_bottom))
 
         top.update_idletasks()
+        outer.update_idletasks()
+
         width = max(_MIN_WIDTH, outer.winfo_reqwidth())
         height = outer.winfo_reqheight()
 
+        scaling = _get_scaling(self._parent)
+        cursor_offset = round(_CURSOR_OFFSET * scaling)
+        screen_margin = round(_SCREEN_MARGIN * scaling)
+
         px, py = self._clamp_to_screen(
-            x_root + _CURSOR_OFFSET,
-            y_root + _CURSOR_OFFSET,
-            width,
-            height,
+            x_root + cursor_offset,
+            y_root + cursor_offset,
+            width, height,
+            screen_margin,
         )
         top.geometry(f"{width}x{height}+{px}+{py}")
 
@@ -283,6 +364,11 @@ class ContextMenu:
     # --- Закрытие ---
 
     def close(self) -> None:
+        _unregister_active(self)
+        self._close_window()
+
+    def _close_window(self) -> None:
+        """Закрывает окно. Трекер не трогает."""
         if self._top is None:
             return
         top = self._top
@@ -304,7 +390,7 @@ class ContextMenu:
             logger.error("Ошибка пункта контекстного меню: %r", exc)
 
     def _clamp_to_screen(
-        self, x: int, y: int, w: int, h: int,
+        self, x: int, y: int, w: int, h: int, margin: int,
     ) -> tuple[int, int]:
         try:
             sw = self._root.winfo_screenwidth()
@@ -313,10 +399,10 @@ class ContextMenu:
             logger.debug("размер экрана: %r", exc)
             return x, y
 
-        if x + w > sw - _SCREEN_MARGIN:
-            x = max(_SCREEN_MARGIN, sw - w - _SCREEN_MARGIN)
-        if y + h > sh - _SCREEN_MARGIN:
-            y = max(_SCREEN_MARGIN, sh - h - _SCREEN_MARGIN)
+        if x + w > sw - margin:
+            x = max(margin, sw - w - margin)
+        if y + h > sh - margin:
+            y = max(margin, sh - h - margin)
         return x, y
 
     def _bind_close(self) -> None:

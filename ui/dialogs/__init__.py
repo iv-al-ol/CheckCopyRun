@@ -6,6 +6,7 @@ from pathlib import Path
 
 import customtkinter as ctk
 
+from core.paths import get_asset_path
 from ui.components.button import (
     VARIANT_PRIMARY,
     VARIANT_SECONDARY,
@@ -26,8 +27,6 @@ _WRAP = 380
 _FOCUS_DELAY_MS = 50
 _MINIMIZED_COORD_MARKER = -30000
 
-# Кэш PhotoImage для иконки диалогов — держим один объект,
-# чтобы не пересоздавать на каждый диалог и не терять на GC.
 _icon_photo_cache = None
 _icon_photo_loaded = False
 
@@ -35,9 +34,7 @@ _icon_photo_loaded = False
 # --- Иконка диалога ---
 
 def _get_icon_path() -> Path | None:
-    # ui/dialogs/__init__.py → корень проекта = три уровня вверх.
-    root = Path(__file__).resolve().parent.parent.parent
-    icon = root / "assets" / "icon.ico"
+    icon = get_asset_path("icon.ico")
     if not icon.exists():
         logger.debug("Иконка диалога не найдена: %s", icon)
         return None
@@ -95,12 +92,6 @@ def setup_dialog(
     title: str,
     parent_visible: bool = True,
 ) -> ctk.CTkToplevel:
-    """Создаёт CTkToplevel с заголовком, иконкой и grab_set.
-
-    Используется всеми диалогами проекта — стандартными здесь и
-    специализированными в ui/dialogs/profile_dialogs.py и
-    ui/components/icon_picker.py.
-    """
     dialog = ctk.CTkToplevel(parent)
     dialog.title(title)
     dialog.resizable(False, False)
@@ -303,26 +294,47 @@ def _target_center_for_hidden(
 
 
 def center_on_parent(dialog: ctk.CTkToplevel, parent) -> None:
+    """Центрирует диалог относительно родителя / монитора.
+
+    Ключевой момент: используем wm_geometry, а не geometry.
+
+    CTkToplevel.geometry() переопределён и умножает W, H (а на
+    некоторых версиях — и X, Y) на текущий DPI-scaling. А
+    winfo_reqwidth() / winfo_reqheight() уже возвращают физические
+    пиксели. Получалось двойное масштабирование — на 125% высота
+    окна раздувалась в 1.5625 раз, под контентом оставалась
+    пустая полоса.
+
+    wm_geometry — низкоуровневый Tk-метод, CTk его не трогает.
+    Работает в физических пикселях как есть.
+    """
     dialog.update_idletasks()
 
     dw = dialog.winfo_reqwidth()
     dh = dialog.winfo_reqheight()
 
+    if dw <= 1 or dh <= 1:
+        logger.debug(
+            "center_on_parent: размер диалога ещё не готов (%dx%d)",
+            dw, dh,
+        )
+        return
+
     target_cx, target_cy = _target_center(dialog, parent)
 
-    dialog.geometry(f"{dw}x{dh}+0+0")
-    dialog.update_idletasks()
+    x = target_cx - dw // 2
+    y = target_cy - dh // 2
 
-    frame_left = dialog.winfo_rootx()
-    frame_top = dialog.winfo_rooty()
+    try:
+        dialog.wm_geometry(f"{dw}x{dh}+{x}+{y}")
+    except Exception as exc:
+        logger.debug("wm_geometry диалога: %r", exc)
+        return
 
-    outer_w = dw + 2 * frame_left
-    outer_h = dh + frame_top + frame_left
-
-    new_x = target_cx - outer_w // 2
-    new_y = target_cy - outer_h // 2
-
-    dialog.geometry(f"+{new_x}+{new_y}")
+    logger.debug(
+        "center_on_parent: диалог %dx%d+%d+%d (target=%d,%d)",
+        dw, dh, x, y, target_cx, target_cy,
+    )
 
 
 def bring_to_front(dialog: ctk.CTkToplevel, parent_visible: bool) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 def _new_id() -> str:
@@ -32,12 +33,20 @@ class Profile:
     destination: str = ""
 
     # Путь к exe, относительный ИСХОДНОЙ директории.
-    # В source файл лежит до копирования, в destination появляется
-    # после копирования по тому же относительному пути.
     exe_relative: str = ""
 
     create_backup: bool = True
     run_after_copy: bool = False
+
+    # Проверять директорию автоматически при старте приложения.
+    # Запуск exe при этом НЕ выполняется, даже если run_after_copy=True.
+    check_on_startup: bool = False
+
+    # Закреплён в главном экране — плитка всегда сверху.
+    pinned: bool = False
+
+    # ISO-время последнего успешного копирования или запуска.
+    last_used_at: str = ""
 
     # --- Имя ---
 
@@ -51,7 +60,6 @@ class Profile:
         return self.name_base
 
     def _auto_name_suffix(self) -> str:
-        # Приоритет: имя exe, потом имя папки-источника.
         if self.exe_relative:
             return os.path.basename(self.exe_relative)
         if self.source:
@@ -63,13 +71,11 @@ class Profile:
     # --- Пути ---
 
     def exe_source_path(self) -> str:
-        """Путь к exe в исходной директории. Отсюда файл копируется."""
         if not (self.exe_relative and self.source):
             return ""
         return os.path.join(self.source, self.exe_relative)
 
     def exe_full_path(self) -> str:
-        """Путь к exe в целевой директории. Отсюда запускаем."""
         if not (self.exe_relative and self.destination):
             return ""
         return os.path.join(self.destination, self.exe_relative)
@@ -90,15 +96,19 @@ class Profile:
         return bool(path) and os.path.isfile(path)
 
     def has_exe(self) -> bool:
-        """Exe выбран и найден в источнике."""
         return self.has_exe_in_source()
 
     def can_run(self) -> bool:
-        """Запуск возможен, только если exe уже скопирован в destination."""
         return (
             self.has_source_and_dest()
             and self.has_exe_in_destination()
         )
+
+    # --- Обновление состояния ---
+
+    def touch(self) -> None:
+        """Обновляет отметку последнего использования."""
+        self.last_used_at = datetime.now().isoformat(timespec="seconds")
 
 
 @dataclass

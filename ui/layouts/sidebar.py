@@ -18,6 +18,7 @@ from config.constants import (
 )
 from core.models import Profile
 from ui.components.scrollable import AutoHideScrollableFrame
+from ui.components.tooltip import Tooltip
 from ui.fonts import get_emoji_font, get_font
 from utils.logger import get_logger
 
@@ -53,15 +54,21 @@ _RUN_BUTTON_PADX = 6
 _FONT_SIZE = 13
 _EMOJI_FONT_SIZE = 14
 
-# Обёртка иконки: одинаковая для всех пунктов — гарантирует, что
-# текст начинается всегда с одной X-координаты.
 _ICON_WRAPPER_SIZE = 28
 _ICON_WRAPPER_PADX_LEFT = 8
 _ICON_WRAPPER_PADX_RIGHT = 4
 
 _SEPARATOR_PADX = 12
 
+_MAX_SCALING_HINT = 4
+
+_RUN_TOOLTIP_TEXT = "Проверить директорию и запустить приложение"
+_RUN_TOOLTIP_DELAY_MS = 400
+
 _ICON_FILE_EXTS = (".png", ".ico", ".jpg", ".jpeg", ".gif", ".bmp")
+
+# Текст кнопки добавления профиля — единая точка правки.
+_ADD_PROFILE_LABEL = "Добавить профиль"
 
 
 def _is_icon_file(icon: str) -> bool:
@@ -79,12 +86,7 @@ def _separator_hex() -> str:
 
 
 class _NavItem(ctk.CTkFrame):
-    """Пункт сайдбара: иконка + текст + опциональная кнопка запуска.
-
-    Иконка сидит в обёртке фиксированного размера, текст — в своей
-    колонке. grid_rowconfigure(0, weight=1) растягивает строку на
-    всю высоту фрейма и центрирует содержимое по вертикали.
-    """
+    """Пункт сайдбара: иконка + текст + опциональная кнопка запуска."""
 
     def __init__(
         self,
@@ -95,6 +97,7 @@ class _NavItem(ctk.CTkFrame):
         on_click: Callable[[], None],
         on_context: Callable[[int, int], None] | None = None,
         on_run: Callable[[], None] | None = None,
+        run_tooltip: str | None = None,
         bold: bool = False,
     ):
         super().__init__(
@@ -110,8 +113,8 @@ class _NavItem(ctk.CTkFrame):
         self._on_click_cb = on_click
         self._active = False
         self._hover = False
+        self._run_tooltip: Tooltip | None = None
 
-        # --- Обёртка иконки ---
         icon_wrapper = ctk.CTkFrame(
             self,
             fg_color="transparent",
@@ -139,7 +142,6 @@ class _NavItem(ctk.CTkFrame):
             )
         icon_label.place(relx=0.5, rely=0.5, anchor="center")
 
-        # --- Текст ---
         self._text_label = ctk.CTkLabel(
             self,
             text=text,
@@ -152,7 +154,6 @@ class _NavItem(ctk.CTkFrame):
             row=0, column=1, sticky="ew", padx=(0, 8),
         )
 
-        # --- Кнопка запуска (справа) ---
         self._run_button: ctk.CTkButton | None = None
         if on_run is not None:
             self._run_button = ctk.CTkButton(
@@ -168,7 +169,13 @@ class _NavItem(ctk.CTkFrame):
                 row=0, column=2, padx=(0, _RUN_BUTTON_PADX),
             )
 
-        # --- Биндинги ---
+            if run_tooltip:
+                self._run_tooltip = Tooltip(
+                    self._run_button,
+                    run_tooltip,
+                    delay_ms=_RUN_TOOLTIP_DELAY_MS,
+                )
+
         targets: list = [self, icon_wrapper, icon_label, self._text_label]
         for w in targets:
             w.bind("<Button-1>", self._handle_click, add="+")
@@ -181,13 +188,9 @@ class _NavItem(ctk.CTkFrame):
                     add="+",
                 )
 
-    # --- Публичное ---
-
     def set_active(self, active: bool) -> None:
         self._active = active
         self._apply_bg()
-
-    # --- Обработчики ---
 
     def _handle_click(self, _event=None) -> None:
         try:
@@ -247,9 +250,11 @@ class _NavItem(ctk.CTkFrame):
         try:
             from PIL import Image
             img = Image.open(icon).convert("RGBA")
-            img.thumbnail((_ICON_WRAPPER_SIZE, _ICON_WRAPPER_SIZE))
+            max_side = _ICON_WRAPPER_SIZE * _MAX_SCALING_HINT
+            img.thumbnail((max_side, max_side), Image.LANCZOS)
             return ctk.CTkImage(
-                light_image=img, dark_image=img, size=img.size,
+                light_image=img, dark_image=img,
+                size=(_ICON_WRAPPER_SIZE, _ICON_WRAPPER_SIZE),
             )
         except ImportError as exc:
             logger.debug(
@@ -294,8 +299,6 @@ class Sidebar(ctk.CTkFrame):
         self._build_static(title)
         self._profiles_container = self._build_scroll_and_bottom()
 
-    # --- Статическая часть ---
-
     def _build_static(self, title: str) -> None:
         ctk.CTkLabel(
             self, text=title, font=get_font(17, "bold"),
@@ -310,7 +313,7 @@ class Sidebar(ctk.CTkFrame):
         add_item = _NavItem(
             self,
             icon="➕",
-            text="Добавить директорию",
+            text=_ADD_PROFILE_LABEL,
             on_click=self._safe_call_noarg(
                 self._on_add_profile, "add profile",
             ),
@@ -379,8 +382,6 @@ class Sidebar(ctk.CTkFrame):
         self._nav_items[key] = item
         return item
 
-    # --- Публичный API ---
-
     def rebuild_profiles(self, profiles: list[Profile]) -> None:
         for row in self._profile_rows.values():
             row.destroy()
@@ -408,8 +409,6 @@ class Sidebar(ctk.CTkFrame):
             item.set_active(nav_key == key)
         for pid, item in self._profile_rows.items():
             item.set_active(profile_key(pid) == key)
-
-    # --- Внутреннее ---
 
     def _make_profile_row(self, profile: Profile) -> _NavItem:
         on_run = None
@@ -440,6 +439,7 @@ class Sidebar(ctk.CTkFrame):
             ),
             on_context=on_context,
             on_run=on_run,
+            run_tooltip=_RUN_TOOLTIP_TEXT if on_run else None,
         )
 
     @staticmethod

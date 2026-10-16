@@ -51,12 +51,13 @@ _IMAGE_EXTS = (".png", ".ico", ".jpg", ".jpeg", ".gif", ".bmp")
 _DIALOG_WIDTH = 540
 _PREVIEW_SIZE = 64
 
-# Ширина кнопок Сохранить / Отмена — одинаковая.
+# Запас на HiDPI при загрузке исходника превью.
+_MAX_SCALING_HINT = 4
+
 _ACTION_BUTTON_WIDTH = 150
 
 _GRID_COLS = 8
 
-# 32 эмодзи. При необходимости расширять здесь.
 _EMOJI_PALETTE: list[str] = [
     "📁", "📂", "🗂", "📦", "🚀", "⚙", "🔧", "💾",
     "🖥", "🌐", "⭐", "🧩", "🎯", "🎨", "🔨", "🛠",
@@ -79,7 +80,14 @@ def _looks_like_path(value: str) -> bool:
     return value.lower().endswith(_IMAGE_EXTS)
 
 
-def _load_ctk_image(path: str, size: int):
+def _load_ctk_image(path: str, logical_size: int):
+    """CTkImage: исходник с запасом на HiDPI, size — логический.
+
+    CTkImage сам умножает size на текущий scaling. Поэтому мы
+    передаём логический размер (например, 64), а исходник храним
+    увеличенным в _MAX_SCALING_HINT раз — чтобы при 200–400% DPI
+    не было мыла.
+    """
     try:
         from PIL import Image
     except ImportError as exc:
@@ -88,9 +96,11 @@ def _load_ctk_image(path: str, size: int):
 
     try:
         img = Image.open(path).convert("RGBA")
-        img.thumbnail((size, size))
+        max_side = logical_size * _MAX_SCALING_HINT
+        img.thumbnail((max_side, max_side), Image.LANCZOS)
         return ctk.CTkImage(
-            light_image=img, dark_image=img, size=img.size,
+            light_image=img, dark_image=img,
+            size=(logical_size, logical_size),
         )
     except Exception as exc:
         logger.debug("Превью %s не построено: %r", path, exc)
@@ -114,7 +124,6 @@ class _IconPickerDialog:
 
         self._result: tuple[str, bool] | None = None
 
-        # --- Исходное состояние ---
         if current_icon_auto and exe_path is not None:
             existing = self._lookup_cached_exe_png(exe_path)
             if existing is not None:
@@ -158,7 +167,6 @@ class _IconPickerDialog:
 
         row = 0
 
-        # --- Заголовок ---
         ctk.CTkLabel(
             self._dialog,
             text="Иконка профиля",
@@ -167,9 +175,6 @@ class _IconPickerDialog:
         ).grid(row=row, column=0, sticky="ew", padx=24, pady=(20, 12))
         row += 1
 
-        # --- Превью ---
-        # Контейнер фиксированного размера, внутри — два label:
-        # для эмодзи и для картинки. Виден всегда только один.
         preview_frame = ctk.CTkFrame(
             self._dialog,
             fg_color="transparent",
@@ -196,7 +201,6 @@ class _IconPickerDialog:
 
         row += 1
 
-        # --- Палитра эмодзи ---
         grid_frame = ctk.CTkFrame(
             self._dialog, fg_color="transparent",
         )
@@ -224,10 +228,8 @@ class _IconPickerDialog:
             self._emoji_buttons[emoji] = btn
         row += 1
 
-        # --- Разделитель №1: эмодзи / чекбокс ---
         row = self._add_separator(row)
 
-        # --- Чекбокс «Иконка приложения» ---
         self._auto_var = ctk.BooleanVar(value=False)
         self._auto_checkbox = ctk.CTkCheckBox(
             self._dialog,
@@ -242,8 +244,6 @@ class _IconPickerDialog:
         )
         row += 1
 
-        # Примечание под чекбоксом — по левому краю, вровень
-        # с текстом самого чекбокса.
         self._auto_hint = ctk.CTkLabel(
             self._dialog,
             text="",
@@ -258,10 +258,8 @@ class _IconPickerDialog:
         )
         row += 1
 
-        # --- Разделитель №2: чекбокс / ручной выбор файла ---
         row = self._add_separator(row)
 
-        # --- Кнопка «Выбрать другую иконку» ---
         file_row = ctk.CTkFrame(
             self._dialog, fg_color="transparent",
         )
@@ -275,10 +273,8 @@ class _IconPickerDialog:
         ).pack()
         row += 1
 
-        # --- Разделитель №3: выбор / кнопки OK-Отмена ---
         row = self._add_separator(row)
 
-        # --- Кнопки OK / Отмена ---
         btns = ctk.CTkFrame(self._dialog, fg_color="transparent")
         btns.grid(row=row, column=0, pady=(4, 20))
 
@@ -300,7 +296,6 @@ class _IconPickerDialog:
         self._dialog.bind("<Escape>", lambda _e: self._on_cancel())
         self._dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
-        # --- Активность чекбокса ---
         if self._exe_path is None:
             self._auto_checkbox.configure(state="disabled")
             self._auto_hint.configure(
@@ -315,7 +310,6 @@ class _IconPickerDialog:
             )
 
     def _add_separator(self, row: int) -> int:
-        """Рисует горизонтальный разделитель. Возвращает следующий row."""
         sep = tk.Frame(
             self._dialog,
             height=1,
@@ -365,7 +359,6 @@ class _IconPickerDialog:
 
         p = Path(path)
 
-        # --- exe: извлекаем первую иконку ---
         if p.suffix.lower() == ".exe":
             png = save_exe_icon(p, get_icons_dir())
             if png is None:
@@ -382,7 +375,6 @@ class _IconPickerDialog:
             self._selected_kind = "file"
             self._selected_value = str(png)
         else:
-            # --- обычный файл изображения ---
             self._selected_kind = "file"
             self._selected_value = str(p.resolve())
 
@@ -436,7 +428,6 @@ class _IconPickerDialog:
         self._refresh_auto_checkbox()
 
     def _refresh_preview(self) -> None:
-        """Показывает либо эмодзи, либо картинку. Один в один момент."""
         if self._selected_kind == "emoji":
             self._show_emoji_preview(self._selected_value)
             return

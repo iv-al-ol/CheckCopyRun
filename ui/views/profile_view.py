@@ -45,11 +45,13 @@ _TITLE_FONT_SIZE = 20
 _ICON_SIZE = 40
 _ICON_CONTAINER_SIZE = _ICON_SIZE + 8
 
+_MAX_SCALING_HINT = 4
+
 _ENTRY_HEIGHT = 32
 _BROWSE_WIDTH = 180
 
-_ACTION_BUTTON_WIDTH = 220      # Копировать / Запустить приложение
-_UTILITY_BUTTON_WIDTH = 160     # Сменить иконку / Переименовать / Сбросить / Удалить
+_ACTION_BUTTON_WIDTH = 220
+_UTILITY_BUTTON_WIDTH = 160
 _BUTTON_GAP = 8
 
 _SEPARATOR_COLOR_DARK = "#4a4a4a"
@@ -63,13 +65,49 @@ def _separator_hex() -> str:
 
 
 def _is_dir_empty(path: str) -> bool:
-    """True, если путь — пустая директория."""
     try:
         with os.scandir(path) as it:
             return next(it, None) is None
     except OSError as exc:
         logger.debug("scandir %s упал: %r", path, exc)
         return False
+
+
+def _path_conflict_text(
+    source: str, destination: str,
+) -> str | None:
+    """Возвращает текст конфликта source/destination или None.
+
+    Конфликт — это любая из ситуаций:
+      • пути совпадают;
+      • destination внутри source;
+      • source внутри destination.
+    Все три ведут к рекурсивной перезаписи или копированию в себя.
+    """
+    if not source or not destination:
+        return None
+
+    try:
+        src = Path(source).resolve()
+        dst = Path(destination).resolve()
+    except OSError as exc:
+        logger.debug(
+            "resolve путей %r / %r: %r", source, destination, exc,
+        )
+        return None
+
+    if src == dst:
+        return "Исходная и целевая директории совпадают"
+
+    try:
+        if src in dst.parents:
+            return "Целевая директория находится внутри исходной"
+        if dst in src.parents:
+            return "Исходная директория находится внутри целевой"
+    except Exception as exc:
+        logger.debug("проверка вложенности путей: %r", exc)
+
+    return None
 
 
 class ProfileView(BaseView):
@@ -164,7 +202,6 @@ class ProfileView(BaseView):
 
         row = 0
 
-        # --- Source ---
         ctk.CTkLabel(
             form, text="Копировать из:", anchor="w",
             font=get_font(_LABEL_FONT_SIZE, "bold"),
@@ -187,7 +224,6 @@ class ProfileView(BaseView):
         ).grid(row=row, column=1, sticky="e")
         row += 1
 
-        # --- Destination ---
         ctk.CTkLabel(
             form, text="Копировать в:", anchor="w",
             font=get_font(_LABEL_FONT_SIZE, "bold"),
@@ -210,7 +246,6 @@ class ProfileView(BaseView):
         ).grid(row=row, column=1, sticky="e")
         row += 1
 
-        # --- Exe ---
         ctk.CTkLabel(
             form, text="Запускаемое приложение:", anchor="w",
             font=get_font(_LABEL_FONT_SIZE, "bold"),
@@ -233,7 +268,6 @@ class ProfileView(BaseView):
         ).grid(row=row, column=1, sticky="e")
         row += 1
 
-        # --- Чекбоксы ---
         self._backup_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             form,
@@ -254,11 +288,22 @@ class ProfileView(BaseView):
             command=self._on_run_after_toggle,
         ).grid(
             row=row, column=0, columnspan=2,
+            sticky="w", pady=(4, 4),
+        )
+        row += 1
+
+        self._check_on_startup_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            form,
+            text="Проверять директорию при запуске CCRun",
+            variable=self._check_on_startup_var,
+            command=self._on_check_on_startup_toggle,
+        ).grid(
+            row=row, column=0, columnspan=2,
             sticky="w", pady=(4, 16),
         )
         row += 1
 
-        # --- Кнопки действий ---
         actions = ctk.CTkFrame(form, fg_color="transparent")
         actions.grid(
             row=row, column=0, columnspan=2, sticky="w",
@@ -377,12 +422,21 @@ class ProfileView(BaseView):
 
         self._backup_var.set(profile.create_backup)
         self._run_after_var.set(profile.run_after_copy)
+        self._check_on_startup_var.set(profile.check_on_startup)
 
         self._update_buttons_state(profile)
 
     @staticmethod
     def _subtitle_for(profile: Profile) -> str:
         parts = []
+
+        # Конфликт путей — приоритетнее всех прочих подсказок.
+        conflict = _path_conflict_text(
+            profile.source, profile.destination,
+        )
+        if conflict:
+            return conflict
+
         if not profile.has_source_and_dest():
             parts.append("Директории не заданы")
         if not profile.exe_relative:
@@ -424,9 +478,11 @@ class ProfileView(BaseView):
         try:
             from PIL import Image
             img = Image.open(path).convert("RGBA")
-            img.thumbnail((_ICON_SIZE, _ICON_SIZE))
+            max_side = _ICON_SIZE * _MAX_SCALING_HINT
+            img.thumbnail((max_side, max_side), Image.LANCZOS)
             ctk_img = ctk.CTkImage(
-                light_image=img, dark_image=img, size=img.size,
+                light_image=img, dark_image=img,
+                size=(_ICON_SIZE, _ICON_SIZE),
             )
         except Exception as exc:
             logger.debug("Иконка профиля не загружена: %r", exc)
@@ -456,10 +512,19 @@ class ProfileView(BaseView):
             self._run_btn.configure(state="disabled")
             return
 
-        self._copy_btn.configure(
-            state="normal" if profile.has_source_and_dest()
-            else "disabled",
+        # Конфликт путей блокирует копирование независимо от того,
+        # что ещё настроено в профиле.
+        conflict = _path_conflict_text(
+            profile.source, profile.destination,
         )
+        if conflict:
+            self._copy_btn.configure(state="disabled")
+        else:
+            self._copy_btn.configure(
+                state="normal" if profile.has_source_and_dest()
+                else "disabled",
+            )
+
         self._run_btn.configure(
             state="normal" if profile.can_run() else "disabled",
         )
@@ -485,7 +550,24 @@ class ProfileView(BaseView):
         if not path:
             return
 
-        profile.source = os.path.abspath(path)
+        new_source = os.path.abspath(path)
+
+        # Конфликт с уже выбранным destination — не принимаем.
+        conflict = _path_conflict_text(
+            new_source, profile.destination,
+        )
+        if conflict:
+            show_error(
+                self.window,
+                "Неверная директория",
+                (
+                    f"{conflict}.\n\n"
+                    f"Выберите другую папку-источник."
+                ),
+            )
+            return
+
+        profile.source = new_source
         profile.exe_relative = ""
         self._save_and_refresh()
 
@@ -509,8 +591,37 @@ class ProfileView(BaseView):
             return
 
         abs_path = os.path.abspath(path)
+
+        # Прямой конфликт с source — не принимаем.
+        conflict = _path_conflict_text(profile.source, abs_path)
+        if conflict:
+            show_error(
+                self.window,
+                "Неверная директория",
+                (
+                    f"{conflict}.\n\n"
+                    f"Выберите другую папку назначения."
+                ),
+            )
+            return
+
         resolved = self._resolve_destination_target(profile, abs_path)
         if resolved is None:
+            return
+
+        # Конфликт после создания вложенной папки: если source
+        # лежит внутри родителя, а итог — src/source_name, то
+        # итог окажется в source.
+        conflict = _path_conflict_text(profile.source, resolved)
+        if conflict:
+            show_error(
+                self.window,
+                "Неверная директория",
+                (
+                    f"{conflict}.\n\n"
+                    f"Выберите другую папку назначения."
+                ),
+            )
             return
 
         profile.destination = resolved
@@ -678,6 +789,19 @@ class ProfileView(BaseView):
         profile.run_after_copy = bool(self._run_after_var.get())
         save_settings(self.window.settings)
 
+    def _on_check_on_startup_toggle(self) -> None:
+        profile = self._profile()
+        if profile is None:
+            return
+        profile.check_on_startup = bool(
+            self._check_on_startup_var.get(),
+        )
+        save_settings(self.window.settings)
+        state = "включена" if profile.check_on_startup else "выключена"
+        self.window.set_status(
+            f"Автопроверка при запуске {state}",
+        )
+
     # --- Иконка / имя / сброс / удаление ---
 
     def _on_change_icon(self) -> None:
@@ -741,8 +865,6 @@ class ProfileView(BaseView):
         profile.source = ""
         profile.destination = ""
         profile.exe_relative = ""
-        # Возвращаем иконку к дефолтной эмодзи и включаем авто-режим.
-        # При следующем выборе exe иконка подтянется заново.
         profile.icon = DEFAULT_PROFILE_ICON
         profile.icon_auto = True
 
@@ -776,6 +898,22 @@ class ProfileView(BaseView):
     def _on_copy(self) -> None:
         profile = self._profile()
         if profile is None or self._busy:
+            return
+
+        # Страховка: даже если кнопка была разблокирована до
+        # изменения путей, повторно проверяем конфликт.
+        conflict = _path_conflict_text(
+            profile.source, profile.destination,
+        )
+        if conflict:
+            show_error(
+                self.window,
+                "Нельзя запустить копирование",
+                (
+                    f"{conflict}.\n\n"
+                    f"Измените исходную или целевую директорию."
+                ),
+            )
             return
 
         self._set_busy(True)
@@ -821,6 +959,9 @@ class ProfileView(BaseView):
                 f"{text}  ·  бэкап: {Path(result.backup_dir).name}",
             )
 
+        profile.touch()
+        save_settings(self.window.settings)
+
         self._reload_from_profile()
 
         if profile.run_after_copy and result.errors == 0:
@@ -847,6 +988,8 @@ class ProfileView(BaseView):
         full = profile.exe_full_path()
         try:
             launch_exe(full)
+            profile.touch()
+            save_settings(self.window.settings)
             self.window.set_status(
                 f"Запущено: {Path(full).name}",
             )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 from ctypes import wintypes
 from pathlib import Path
 
@@ -60,7 +61,7 @@ def _documents_via_winapi() -> Path | None:
 
     try:
         hr = shell32.SHGetKnownFolderPath(
-            ctypes.byref(guid), 0, None, ctypes.byref(ptr)
+            ctypes.byref(guid), 0, None, ctypes.byref(ptr),
         )
     except OSError as exc:
         logger.debug("SHGetKnownFolderPath бросил: %r", exc)
@@ -82,9 +83,36 @@ def get_documents_dir() -> Path:
     if via_api is not None:
         return via_api
 
-    fallback = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Documents"
+    fallback = (
+        Path(os.environ.get("USERPROFILE", str(Path.home())))
+        / "Documents"
+    )
     logger.debug("Documents через fallback: %s", fallback)
     return fallback
+
+
+def get_resource_root() -> Path:
+    """Корень ресурсов приложения.
+
+    Возвращает папку, рядом с которой лежит `assets/`. Корректно
+    работает в трёх режимах:
+      • исходники — от __file__ модуля;
+      • Nuitka --standalone — тот же __file__, но внутри .dist;
+      • Nuitka --onefile — __file__ ведёт в распакованную
+        временную папку, где тоже есть assets/.
+    """
+    # Если модуль скомпилирован Nuitka, __file__ уже указывает
+    # либо в .dist, либо в распакованную temp-папку. Дополнительные
+    # проверки для sys.frozen (PyInstaller) — на будущее.
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+
+    return Path(__file__).resolve().parent.parent
+
+
+def get_asset_path(name: str) -> Path:
+    """Путь к файлу из assets/."""
+    return get_resource_root() / "assets" / name
 
 
 def is_valid_directory(path: str) -> bool:

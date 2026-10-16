@@ -34,6 +34,9 @@ _PROFILE_FIELDS = {
     "exe_relative",
     "create_backup",
     "run_after_copy",
+    "check_on_startup",
+    "pinned",
+    "last_used_at",
 }
 
 
