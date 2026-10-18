@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from config.constants import (
+    HASH_CACHE_ENABLED_DEFAULT,
     ICONS_DIR_NAME,
     SETTINGS_DIR_NAME,
     SETTINGS_FILE_NAME,
@@ -45,7 +46,6 @@ def get_settings_path() -> Path:
 
 
 def get_icons_dir() -> Path:
-    """Папка для извлечённых PNG-иконок: Documents/CheckCopyRun/icons."""
     return get_documents_dir() / SETTINGS_DIR_NAME / ICONS_DIR_NAME
 
 
@@ -115,6 +115,7 @@ def _to_dict(s: AppSettings) -> dict:
         "confirm_on_exit": s.confirm_on_exit,
         "window_geometry": s.window_geometry,
         "last_view": s.last_view,
+        "hash_cache_enabled": s.hash_cache_enabled,
         "profiles": [asdict(p) for p in s.profiles],
     }
 
@@ -131,5 +132,11 @@ def _from_dict(data: dict) -> AppSettings:
         confirm_on_exit=bool(data.get("confirm_on_exit", False)),
         window_geometry=data.get("window_geometry", ""),
         last_view=data.get("last_view", "main"),
+        hash_cache_enabled=bool(
+            data.get(
+                "hash_cache_enabled",
+                HASH_CACHE_ENABLED_DEFAULT,
+            )
+        ),
         profiles=profiles,
     )

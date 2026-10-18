@@ -1,32 +1,59 @@
-"""Сервис копирования файлов.
+"""Сервис копирования файлов с безопасным бэкапом и откатом.
 
 Копирует содержимое source в destination. Если файл в destination
 отличается от source — сохраняет старую версию в бэкап и
-перезаписывает. Бэкап-папка создаётся один раз, только при первом
-реальном различии.
+перезаписывает. Бэкапятся строго те файлы, которые заменяются.
 
-Работает в отдельном потоке. Прогресс, завершение и ошибки
-доставляются через callbacks, обёрнутые scheduler. По умолчанию
-scheduler вызывает callback напрямую; из UI передаётся обёртка
-вида self.after(0, fn) — тогда callbacks исполняются в UI-потоке.
+Сравнение с кэшем SHA-256: файлы проверяются по размеру и mtime,
+хэш пересчитывается только при изменениях. Кэш живёт в
+<destination>/!CCRun/hashes.json.
+
+Безопасная отмена: destination возвращается к состоянию
+«до копирования» — заменённые восстанавливаются из бэкапа,
+созданные нами удаляются.
+
+Проверка конфликта путей — core.paths.path_conflict_error.
 """
 
 from __future__ import annotations
 
-import filecmp
 import os
 import shutil
 import threading
 import time
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
+from core.paths import path_conflict_error
+from services.copy_backup import BackupManager
+from services.copy_constants import is_special_first_segment
+from services.copy_errors import (
+    BackupVerificationError,
+    CopyError,
+    CopyValidationError,
+)
+from services.copy_manifest import write_manifest
+from services.copy_rollback import RollbackManager
+from services.file_compare import (
+    ComparisonResult,
+    files_identical,
+)
+from services.hash_cache import HashCache, hash_file
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+__all__ = [
+    "BackupVerificationError",
+    "CopyError",
+    "CopyProgress",
+    "CopyResult",
+    "CopyService",
+    "CopyValidationError",
+    "format_cancel_status",
+]
 
 
 # --- Результаты ---
@@ -55,50 +82,58 @@ class CopyResult:
     cancelled: bool = False
     elapsed_sec: float = 0.0
 
+    rollback_attempted: bool = False
+    rolled_back: bool = False
+    rollback_restored: int = 0
+    rollback_deleted: int = 0
+    rollback_errors: int = 0
 
-# --- Исключения ---
 
-class CopyError(RuntimeError):
-    """Базовая ошибка копирования."""
+def format_cancel_status(result: CopyResult) -> str:
+    if not result.rollback_attempted:
+        return "Копирование отменено"
 
+    if not result.rolled_back:
+        return (
+            f"Копирование отменено, откат неполный "
+            f"({result.rollback_errors} ошибок) — см. лог"
+        )
 
-class CopyValidationError(CopyError):
-    """Параметры не прошли проверку."""
+    if result.rollback_restored > 0 or result.rollback_deleted > 0:
+        return (
+            "Копирование отменено, "
+            "замененные файлы восстановлены обратно"
+        )
+
+    return "Копирование отменено, изменений не было"
 
 
 # --- Проверки ---
 
 def _validate(source: str, destination: str) -> None:
+    """Проверка путей перед копированием.
+
+    Использует path_conflict_error из core.paths — единый
+    источник правил «что считается конфликтом» для сервиса и
+    UI-слоя.
+    """
     if not source:
         raise CopyValidationError("Не указана исходная директория")
     if not destination:
         raise CopyValidationError("Не указана целевая директория")
 
-    src = Path(source).resolve()
-    dst = Path(destination).resolve()
-
-    if not src.is_dir():
+    if not Path(source).is_dir():
         raise CopyValidationError(
-            f"Исходная директория не найдена: {src}",
+            f"Исходная директория не найдена: {source}",
         )
-    if not dst.is_dir():
+    if not Path(destination).is_dir():
         raise CopyValidationError(
-            f"Целевая директория не найдена: {dst}",
+            f"Целевая директория не найдена: {destination}",
         )
 
-    if src == dst:
-        raise CopyValidationError(
-            "Исходная и целевая директории совпадают",
-        )
-
-    if src in dst.parents:
-        raise CopyValidationError(
-            "Целевая директория находится внутри исходной",
-        )
-    if dst in src.parents:
-        raise CopyValidationError(
-            "Исходная директория находится внутри целевой",
-        )
+    conflict = path_conflict_error(source, destination)
+    if conflict:
+        raise CopyValidationError(conflict)
 
 
 # --- Воркер ---
@@ -109,6 +144,7 @@ class _CopyWorker(threading.Thread):
         source: str,
         destination: str,
         create_backup: bool,
+        hash_cache_enabled: bool,
         cancel_event: threading.Event,
         scheduler: Callable[[Callable[[], None]], None],
         on_progress: Callable[[CopyProgress], None],
@@ -127,7 +163,15 @@ class _CopyWorker(threading.Thread):
 
         self._result = CopyResult()
         self._last_percent = -1
-        self._backup_dir: Path | None = None
+
+        self._backup: BackupManager | None = None
+        self._cache = HashCache(
+            destination, enabled=hash_cache_enabled,
+        )
+
+        self._replaced_without_backup: list[str] = []
+        self._created_files: list[str] = []
+        self._created_dirs: set[str] = set()
 
     # --- Публичное ---
 
@@ -146,8 +190,12 @@ class _CopyWorker(threading.Thread):
         self._result.total = len(files)
         self._emit_progress(0)
 
+        self._cache.load()
+
         if not files:
             self._result.elapsed_sec = time.perf_counter() - started
+            self._prune_cache(set())
+            self._cache.save()
             self._emit_done()
             return
 
@@ -167,76 +215,222 @@ class _CopyWorker(threading.Thread):
             self._emit_progress(processed)
 
         self._result.elapsed_sec = time.perf_counter() - started
+
+        if self._result.cancelled:
+            self._rollback()
+            self._invalidate_cache_after_rollback()
+
+        self._prune_cache(set(files))
+        self._cache.save()
+
+        self._write_manifest()
         self._emit_done()
 
-    # --- Внутреннее ---
+    # --- Сбор файлов ---
 
     def _collect_files(self) -> list[str]:
-        """Относительные пути всех файлов из source."""
         result: list[str] = []
-        for root, _dirs, names in os.walk(self._source):
+
+        for root, dirs, names in os.walk(self._source):
+            rel_root = os.path.relpath(root, self._source)
+            if rel_root == ".":
+                dirs[:] = [
+                    d for d in dirs
+                    if not is_special_first_segment(d)
+                ]
+
             for name in names:
                 full = os.path.join(root, name)
                 rel = os.path.relpath(full, self._source)
+
+                first = rel.split(os.sep, 1)[0]
+                if is_special_first_segment(first):
+                    continue
+
                 result.append(rel)
+
         return result
+
+    # --- Обработка одного файла ---
 
     def _process_file(self, rel_path: str) -> None:
         src_path = os.path.join(self._source, rel_path)
         dst_path = os.path.join(self._destination, rel_path)
 
-        # Создаём директорию назначения (если файл в подпапке)
         dst_dir = os.path.dirname(dst_path)
         if dst_dir:
-            os.makedirs(dst_dir, exist_ok=True)
+            self._ensure_dst_dir_tracked(dst_dir)
 
-        # Если в destination файла ещё нет — просто копируем
+        # 1. Новый файл — копируем и сразу кэшируем.
         if not os.path.isfile(dst_path):
             shutil.copy2(src_path, dst_path)
             self._result.copied += 1
+            self._created_files.append(rel_path)
+            self._cache_new_file(rel_path, src_path)
             return
 
-        # Сравниваем: одинаковые — пропускаем
-        try:
-            same = filecmp.cmp(src_path, dst_path, shallow=True)
-        except Exception as exc:
-            logger.debug(
-                "filecmp.cmp упал для %s: %r", rel_path, exc,
-            )
-            same = False
+        # 2. Сравниваем с учётом кэша.
+        outcome = files_identical(
+            src_path, dst_path, rel_path, self._cache,
+        )
 
-        if same:
+        if outcome.result == ComparisonResult.SAME:
             self._result.skipped += 1
             return
 
-        # Разные — бэкап старой версии (если нужно) и перезапись
+        # 3. Отличается — бэкап (если нужно) и перезапись.
         if self._create_backup:
-            self._ensure_backup_dir()
-            backup_path = os.path.join(
-                str(self._backup_dir), rel_path,
-            )
-            backup_sub = os.path.dirname(backup_path)
-            if backup_sub:
-                os.makedirs(backup_sub, exist_ok=True)
-            shutil.copy2(dst_path, backup_path)
+            self._ensure_backup_manager()
+            assert self._backup is not None
+            self._backup.backup(rel_path, dst_path)
+        else:
+            self._replaced_without_backup.append(rel_path)
 
         shutil.copy2(src_path, dst_path)
         self._result.copied += 1
 
-    def _ensure_backup_dir(self) -> None:
-        if self._backup_dir is not None:
+        # 4. Обновляем кэш после замены.
+        if self._cache.enabled:
+            if outcome.src_hash is not None:
+                self._cache.put(
+                    rel_path,
+                    size=outcome.src_size,
+                    src_mtime_ns=outcome.src_mtime_ns,
+                    dst_mtime_ns=outcome.src_mtime_ns,
+                    sha256=outcome.src_hash,
+                )
+            else:
+                # size-differ case — src_hash не был вычислен.
+                self._cache_new_file(rel_path, src_path)
+
+    def _cache_new_file(self, rel_path: str, src_path: str) -> None:
+        if not self._cache.enabled:
+            return
+        try:
+            src_stat = os.stat(src_path)
+            src_hash = hash_file(src_path, self._cache.algorithm)
+        except OSError as exc:
+            logger.debug(
+                "не удалось захэшировать %s: %r", src_path, exc,
+            )
             return
 
-        stamp = datetime.now().strftime("%d.%m.%Y_%H.%M.%S_%f")[:-3]
-        suffix = uuid.uuid4().hex[:6]
-        name = f"!Backup_{stamp}_{suffix}"
+        self._cache.put(
+            rel_path,
+            size=src_stat.st_size,
+            src_mtime_ns=src_stat.st_mtime_ns,
+            dst_mtime_ns=src_stat.st_mtime_ns,
+            sha256=src_hash,
+        )
 
-        path = Path(self._destination) / name
-        path.mkdir(parents=True, exist_ok=True)
+    def _prune_cache(self, current_files: set[str]) -> None:
+        if not self._cache.enabled:
+            return
+        for rel in self._cache.paths():
+            if rel not in current_files:
+                self._cache.remove(rel)
 
-        self._backup_dir = path
-        self._result.backup_dir = str(path)
-        logger.info("Создана папка бэкапа: %s", path)
+    # --- Директории ---
+
+    def _ensure_dst_dir_tracked(self, dst_dir: str) -> None:
+        if not dst_dir or os.path.isdir(dst_dir):
+            return
+
+        to_create: list[str] = []
+        current = dst_dir
+        while current and current != os.path.dirname(current):
+            if os.path.isdir(current):
+                break
+            to_create.append(current)
+            current = os.path.dirname(current)
+
+        try:
+            os.makedirs(dst_dir, exist_ok=True)
+        except OSError as exc:
+            logger.error(
+                "Не удалось создать %s: %r", dst_dir, exc,
+            )
+            raise
+
+        self._created_dirs.update(to_create)
+
+    # --- Бэкап ---
+
+    def _ensure_backup_manager(self) -> None:
+        if self._backup is not None:
+            return
+        self._backup = BackupManager(self._destination)
+        self._backup.ensure_dir()
+        self._result.backup_dir = str(self._backup.backup_dir)
+
+    # --- Откат ---
+
+    def _rollback(self) -> None:
+        replaced_entries = (
+            list(self._backup.entries) if self._backup else []
+        )
+        backup_dir = (
+            self._backup.backup_dir if self._backup else None
+        )
+
+        manager = RollbackManager(
+            destination=self._destination,
+            backup_dir=backup_dir,
+        )
+        result = manager.rollback(
+            replaced_entries=replaced_entries,
+            replaced_without_backup=self._replaced_without_backup,
+            created_files=self._created_files,
+            created_dirs=self._created_dirs,
+        )
+
+        self._result.rollback_attempted = result.attempted
+        self._result.rollback_restored = result.restored
+        self._result.rollback_deleted = result.deleted
+        self._result.rollback_errors = result.errors
+        self._result.rolled_back = result.succeeded
+
+    def _invalidate_cache_after_rollback(self) -> None:
+        if not self._cache.enabled:
+            return
+        for rel in self._created_files:
+            self._cache.remove(rel)
+        if self._backup is not None:
+            for entry in self._backup.entries:
+                self._cache.remove(entry.path)
+
+    # --- Манифест ---
+
+    def _write_manifest(self) -> None:
+        if self._backup is None or self._backup.backup_dir is None:
+            return
+
+        entries = list(self._backup.entries)
+        summary: dict = {
+            "backed_up": len(entries),
+            "copied": self._result.copied,
+            "skipped": self._result.skipped,
+            "errors": self._result.errors,
+            "cancelled": self._result.cancelled,
+            "elapsed_sec": round(self._result.elapsed_sec, 3),
+        }
+
+        if self._result.cancelled:
+            summary["rollback"] = {
+                "attempted": self._result.rollback_attempted,
+                "succeeded": self._result.rolled_back,
+                "restored": self._result.rollback_restored,
+                "deleted": self._result.rollback_deleted,
+                "errors": self._result.rollback_errors,
+            }
+
+        write_manifest(
+            self._backup.backup_dir,
+            source=self._source,
+            destination=self._destination,
+            files=entries,
+            summary=summary,
+        )
 
     # --- Доставка событий ---
 
@@ -247,8 +441,6 @@ class _CopyWorker(threading.Thread):
             copied=self._result.copied,
             skipped=self._result.skipped,
         )
-        # Прогресс шлём, только когда меняется целочисленный
-        # процент — иначе UI получает сотни лишних обновлений.
         is_final = processed == self._result.total
         if progress.percent == self._last_percent and not is_final:
             return
@@ -288,7 +480,6 @@ class CopyService:
         self,
         scheduler: Callable[[Callable[[], None]], None] | None = None,
     ):
-        # scheduler — как доставить callback: напрямую или в UI-поток.
         self._scheduler = scheduler or (lambda fn: fn())
         self._lock = threading.Lock()
         self._worker: _CopyWorker | None = None
@@ -307,13 +498,9 @@ class CopyService:
         on_progress: Callable[[CopyProgress], None],
         on_done: Callable[[CopyResult], None],
         on_error: Callable[[str], None],
+        *,
+        hash_cache_enabled: bool = True,
     ) -> bool:
-        """Запускает копирование.
-
-        Возвращает True, если поток стартовал. False — если уже идёт
-        другое копирование или параметры не прошли валидацию (в
-        последнем случае on_error уже вызван через scheduler).
-        """
         with self._lock:
             if self._worker is not None and self._worker.is_alive():
                 logger.warning("Копирование уже выполняется")
@@ -336,6 +523,7 @@ class CopyService:
                 source=source,
                 destination=destination,
                 create_backup=create_backup,
+                hash_cache_enabled=hash_cache_enabled,
                 cancel_event=self._cancel_event,
                 scheduler=self._scheduler,
                 on_progress=on_progress,
@@ -344,16 +532,16 @@ class CopyService:
             )
             self._worker.start()
             logger.info(
-                "Копирование запущено: %s → %s", source, destination,
+                "Копирование запущено: %s → %s (cache=%s)",
+                source, destination, hash_cache_enabled,
             )
             return True
 
     def cancel(self) -> None:
-        """Запрос отмены текущего копирования. Поток остановится на
-        следующей итерации, результат придёт в on_done с
-        cancelled=True."""
         with self._lock:
             if self._cancel_event is None:
                 return
             self._cancel_event.set()
-            logger.info("Запрошена отмена копирования")
+            logger.info(
+                "Запрошена отмена копирования — будет выполнен откат",
+            )

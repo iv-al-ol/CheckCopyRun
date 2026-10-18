@@ -1,10 +1,4 @@
-"""Плитка профиля для главного экрана.
-
-Показывает иконку, имя, короткие пути и три кнопки быстрого
-взаимодействия: копировать, запустить, закрепить. Кнопки —
-иконки с всплывающими подсказками. Клик по телу плитки открывает
-профиль в сайдбаре.
-"""
+"""Плитка профиля для главного экрана."""
 
 from __future__ import annotations
 
@@ -15,12 +9,19 @@ import customtkinter as ctk
 
 from config.constants import DEFAULT_PROFILE_ICON
 from core.models import Profile
+from ui.components.image_utils import (
+    load_ctk_image,
+    looks_like_image_path,
+)
 from ui.components.tooltip import Tooltip
 from ui.fonts import get_emoji_font, get_font
 from ui.palette import (
     ACCENT,
     ACCENT_HOVER,
     ACCENT_TEXT,
+    SUCCESS,
+    SUCCESS_HOVER,
+    SUCCESS_TEXT,
     SURFACE_BG,
     SURFACE_BORDER,
     SURFACE_HOVER,
@@ -31,7 +32,6 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# --- Геометрия ---
 _TILE_PADX = 12
 _TILE_PADY_TOP_BOTTOM = 10
 _TILE_RADIUS = SURFACE_RADIUS
@@ -39,9 +39,6 @@ _TILE_RADIUS = SURFACE_RADIUS
 _ICON_SIZE = 40
 _ICON_FONT_SIZE = 24
 _ICON_PADX_RIGHT = 12
-
-# Запас на HiDPI при загрузке файловых иконок.
-_MAX_SCALING_HINT = 4
 
 _NAME_FONT_SIZE = 13
 _PATH_FONT_SIZE = 11
@@ -52,7 +49,7 @@ _BUTTON_RADIUS = 6
 _BUTTON_FONT_SIZE = 14
 
 _TOOLTIP_COPY = "Копировать"
-_TOOLTIP_RUN = "Запустить приложение"
+_TOOLTIP_RUN = "Проверить директорию и запустить приложение"
 _TOOLTIP_PIN = "Закрепить"
 _TOOLTIP_UNPIN = "Открепить"
 _TOOLTIP_DELAY_MS = 400
@@ -60,8 +57,6 @@ _TOOLTIP_DELAY_MS = 400
 _ICON_COPY = "📋"
 _ICON_RUN = "▶"
 _ICON_PIN = "📌"
-
-_IMAGE_EXTS = (".png", ".ico", ".jpg", ".jpeg", ".gif", ".bmp")
 
 
 class ProfileTile(ctk.CTkFrame):
@@ -94,13 +89,12 @@ class ProfileTile(ctk.CTkFrame):
 
         self._hover = False
         self._tooltips: list[Tooltip] = []
+        self._clickable_widgets: list = []
 
         self._build_icon()
         self._build_texts()
         self._build_actions()
         self._bind_hover()
-
-    # --- Построение ---
 
     def _build_icon(self) -> None:
         wrapper = ctk.CTkFrame(
@@ -116,7 +110,11 @@ class ProfileTile(ctk.CTkFrame):
             pady=_TILE_PADY_TOP_BOTTOM,
         )
 
-        image = self._build_image(self._profile.icon)
+        image = (
+            load_ctk_image(self._profile.icon, _ICON_SIZE)
+            if looks_like_image_path(self._profile.icon)
+            else None
+        )
         if image is not None:
             label = ctk.CTkLabel(wrapper, image=image, text="")
         else:
@@ -181,16 +179,21 @@ class ProfileTile(ctk.CTkFrame):
             icon=_ICON_COPY,
             tooltip=_TOOLTIP_COPY,
             command=lambda: self._on_copy(self._profile.id),
-            enabled=self._profile.has_source_and_dest(),
+            enabled=self._profile.can_copy(),
         )
         self._copy_btn.pack(side="left", padx=(0, _BUTTON_PADX))
 
+        # Кнопка запуска: клик = копирование + запуск. Доступна,
+        # если source/destination заданы (exe появится после копирования).
         self._run_btn = self._icon_button(
             actions,
             icon=_ICON_RUN,
             tooltip=_TOOLTIP_RUN,
             command=lambda: self._on_run(self._profile.id),
-            enabled=self._profile.can_run(),
+            enabled=self._profile.can_copy(),
+            fg_color=SUCCESS,
+            hover_color=SUCCESS_HOVER,
+            text_color=SUCCESS_TEXT,
         )
         self._run_btn.pack(side="left", padx=(0, _BUTTON_PADX))
 
@@ -220,6 +223,9 @@ class ProfileTile(ctk.CTkFrame):
         tooltip: str,
         command: Callable[[], None],
         enabled: bool,
+        fg_color=None,
+        hover_color=None,
+        text_color=None,
     ) -> ctk.CTkButton:
         btn = ctk.CTkButton(
             master,
@@ -227,9 +233,15 @@ class ProfileTile(ctk.CTkFrame):
             width=_BUTTON_SIZE,
             height=_BUTTON_SIZE,
             corner_radius=_BUTTON_RADIUS,
-            fg_color="transparent",
-            hover_color=SURFACE_HOVER,
-            text_color=SURFACE_TEXT,
+            fg_color=fg_color if fg_color is not None else "transparent",
+            hover_color=(
+                hover_color if hover_color is not None
+                else SURFACE_HOVER
+            ),
+            text_color=(
+                text_color if text_color is not None
+                else SURFACE_TEXT
+            ),
             font=get_font(_BUTTON_FONT_SIZE),
             command=command,
         )
@@ -240,8 +252,6 @@ class ProfileTile(ctk.CTkFrame):
                 Tooltip(btn, tooltip, delay_ms=_TOOLTIP_DELAY_MS),
             )
         return btn
-
-    # --- Наведение и клик по телу плитки ---
 
     def _bind_hover(self) -> None:
         for w in [self, *self._clickable_widgets]:
@@ -268,7 +278,6 @@ class ProfileTile(ctk.CTkFrame):
         except Exception as exc:
             logger.debug("winfo_containing плитки: %r", exc)
             return
-
         if under is None or not self._is_inside(under):
             if self._hover:
                 self._hover = False
@@ -298,16 +307,12 @@ class ProfileTile(ctk.CTkFrame):
                 "Открытие профиля %s: %r", self._profile.id, exc,
             )
 
-    # --- Утилиты ---
-
     @staticmethod
     def _short_paths(profile: Profile) -> str:
         src = profile.source
         dst = profile.destination
-
         if not src and not dst:
             return "Директории не заданы"
-
         src_short = os.path.basename(src.rstrip("/\\")) if src else "?"
         dst_short = os.path.basename(dst.rstrip("/\\")) if dst else "?"
         return f"{src_short}  →  {dst_short}"
@@ -319,24 +324,3 @@ class ProfileTile(ctk.CTkFrame):
         if profile.source or profile.destination:
             return f"{src}\n{dst}"
         return ""
-
-    @staticmethod
-    def _build_image(icon: str):
-        """CTkImage с логическим размером и исходником под HiDPI."""
-        if not icon:
-            return None
-        is_path = "/" in icon or "\\" in icon
-        if not is_path and not icon.lower().endswith(_IMAGE_EXTS):
-            return None
-        try:
-            from PIL import Image
-            img = Image.open(icon).convert("RGBA")
-            max_side = _ICON_SIZE * _MAX_SCALING_HINT
-            img.thumbnail((max_side, max_side), Image.LANCZOS)
-            return ctk.CTkImage(
-                light_image=img, dark_image=img,
-                size=(_ICON_SIZE, _ICON_SIZE),
-            )
-        except Exception as exc:
-            logger.debug("Иконка %s не загружена: %r", icon, exc)
-            return None

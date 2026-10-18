@@ -1,4 +1,9 @@
-"""Работа с системными путями (Documents через WinAPI)."""
+"""Работа с системными путями и валидация путей.
+
+Documents через WinAPI (корректно работает с OneDrive и
+перенесёнными папками). Ресурсы через __file__ с учётом
+Nuitka-сборки. Проверки: конфликт source/destination.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +20,8 @@ logger = get_logger(__name__)
 # FOLDERID_Documents = {FDD39AD0-238F-46AF-ADB4-6C85480369C7}
 _FOLDERID_Documents = "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}"
 
+
+# --- Documents через WinAPI ---
 
 class _GUID(ctypes.Structure):
     _fields_ = [
@@ -91,19 +98,17 @@ def get_documents_dir() -> Path:
     return fallback
 
 
+# --- Ресурсы ---
+
 def get_resource_root() -> Path:
     """Корень ресурсов приложения.
 
-    Возвращает папку, рядом с которой лежит `assets/`. Корректно
-    работает в трёх режимах:
+    Работает в трёх режимах:
       • исходники — от __file__ модуля;
       • Nuitka --standalone — тот же __file__, но внутри .dist;
       • Nuitka --onefile — __file__ ведёт в распакованную
         временную папку, где тоже есть assets/.
     """
-    # Если модуль скомпилирован Nuitka, __file__ уже указывает
-    # либо в .dist, либо в распакованную temp-папку. Дополнительные
-    # проверки для sys.frozen (PyInstaller) — на будущее.
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
 
@@ -115,9 +120,46 @@ def get_asset_path(name: str) -> Path:
     return get_resource_root() / "assets" / name
 
 
+# --- Проверки ---
+
 def is_valid_directory(path: str) -> bool:
     return bool(path) and os.path.isdir(path)
 
 
 def is_valid_file(path: str) -> bool:
     return bool(path) and os.path.isfile(path)
+
+
+def path_conflict_error(
+    source: str, destination: str,
+) -> str | None:
+    """Текст конфликта source/destination или None.
+
+    Конфликт — совпадение путей или вложенность в любую сторону.
+    Все три случая ведут к рекурсивной перезаписи или копированию
+    в себя.
+    """
+    if not source or not destination:
+        return None
+
+    try:
+        src = Path(source).resolve()
+        dst = Path(destination).resolve()
+    except OSError as exc:
+        logger.debug(
+            "resolve путей %r / %r: %r", source, destination, exc,
+        )
+        return None
+
+    if src == dst:
+        return "Исходная и целевая директории совпадают"
+
+    try:
+        if src in dst.parents:
+            return "Целевая директория находится внутри исходной"
+        if dst in src.parents:
+            return "Исходная директория находится внутри целевой"
+    except Exception as exc:
+        logger.debug("проверка вложенности путей: %r", exc)
+
+    return None

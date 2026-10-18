@@ -4,14 +4,17 @@
 рамкой SURFACE_BORDER. Каждая строка — фикс-обёртка иконки 24×24
 плюс текстовый label.
 
-Использует tk.Toplevel вместо CTkToplevel — у последнего внутри
-есть canvas, который на некоторых DPI добавляет лишние отступы
-и мешает точному подгону размера окна под содержимое.
+Скругления: окно прямоугольное, углы вне скруглённой рамки
+заполняются служебным цветом и становятся прозрачными через
+-transparentcolor (Windows).
 
-Одновременно открыто только одно меню: глобальный трекер
-закрывает предыдущее при показе нового. Это защищает от ситуации,
-когда пользователь открывает меню повторными кликами, а старые
-остаются висеть.
+Разделитель — ui.components.separator.make_separator.
+
+Меню закрывается по:
+- клику вне меню,
+- потере фокуса приложения,
+- Escape,
+- выбору пункта.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from collections.abc import Callable
 
 import customtkinter as ctk
 
+from ui.components.separator import make_separator
 from ui.fonts import get_emoji_font, get_font
 from ui.palette import (
     DANGER_HOVER,
@@ -59,44 +63,8 @@ _FOCUS_CHECK_DELAY_MS = 60
 
 _FRAME_BORDER_WIDTH = 1
 
-
-# --- Глобальный трекер активного меню ---
-
-_active_menu: ContextMenu | None = None
-
-
-def _register_active(menu: ContextMenu) -> None:
-    """Регистрирует меню как активное, закрывая предыдущее."""
-    global _active_menu
-    previous = _active_menu
-    _active_menu = menu
-
-    if previous is None or previous is menu:
-        return
-
-    try:
-        previous.close()
-    except Exception as exc:
-        logger.debug("close предыдущего меню: %r", exc)
-
-
-def _unregister_active(menu: ContextMenu) -> None:
-    global _active_menu
-    if _active_menu is menu:
-        _active_menu = None
-
-
-def _separator_hex() -> str:
-    if ctk.get_appearance_mode() == "Dark":
-        return "#555555"
-    return "#c0c0c0"
-
-
-def _background_hex() -> str:
-    """Hex-цвет фона меню под текущую тему (для tk.Toplevel)."""
-    mode = ctk.get_appearance_mode()
-    bg = SURFACE_BG[1] if mode == "Dark" else SURFACE_BG[0]
-    return bg
+# Служебный цвет для прозрачных углов.
+_TRANSPARENT_COLOR = "#ff00fe"
 
 
 def _get_scaling(widget) -> float:
@@ -107,6 +75,19 @@ def _get_scaling(widget) -> float:
     except Exception as exc:
         logger.debug("ScalingTracker.get_widget_scaling: %r", exc)
     return 1.0
+
+
+def _make_transparent(window: tk.Toplevel) -> None:
+    try:
+        window.configure(bg=_TRANSPARENT_COLOR)
+    except Exception as exc:
+        logger.debug("configure(bg) у Toplevel: %r", exc)
+        return
+
+    try:
+        window.attributes("-transparentcolor", _TRANSPARENT_COLOR)
+    except Exception as exc:
+        logger.debug("-transparentcolor: %r", exc)
 
 
 class _MenuRow(ctk.CTkFrame):
@@ -270,14 +251,7 @@ class ContextMenu:
             logger.debug("ContextMenu.show: пустое меню")
             return
 
-        # Закрываем предыдущее активное меню (если было). Это
-        # важно: пользователь может открыть ПКМ несколько раз
-        # подряд — старые не должны оставаться на экране.
-        _register_active(self)
-
-        # Своё собственное состояние на всякий случай тоже чистим:
-        # если этот же объект показывают повторно.
-        self._close_window()
+        self.close()
 
         top = tk.Toplevel(self._parent)
         top.overrideredirect(True)
@@ -285,10 +259,7 @@ class ContextMenu:
             top.attributes("-topmost", True)
         except Exception as exc:
             logger.debug("attributes(-topmost): %r", exc)
-        try:
-            top.configure(bg=_background_hex())
-        except Exception as exc:
-            logger.debug("configure(bg) у Toplevel: %r", exc)
+        _make_transparent(top)
         self._top = top
 
         outer = ctk.CTkFrame(
@@ -313,19 +284,12 @@ class ContextMenu:
 
         for idx, (label, icon, command, danger) in enumerate(self._items):
             if command is None:
-                sep = tk.Frame(
-                    inner,
-                    height=1,
-                    bg=_separator_hex(),
-                    bd=0,
-                    highlightthickness=0,
-                )
+                sep = make_separator(inner)
                 sep.pack(
                     fill="x",
                     padx=_SEPARATOR_PADX,
                     pady=_SEPARATOR_PADY,
                 )
-                sep.pack_propagate(False)
                 continue
 
             is_last_action = (idx == last_action_idx)
@@ -364,11 +328,6 @@ class ContextMenu:
     # --- Закрытие ---
 
     def close(self) -> None:
-        _unregister_active(self)
-        self._close_window()
-
-    def _close_window(self) -> None:
-        """Закрывает окно. Трекер не трогает."""
         if self._top is None:
             return
         top = self._top

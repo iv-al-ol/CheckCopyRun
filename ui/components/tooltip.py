@@ -3,6 +3,17 @@
 Дизайн повторяет context_menu и option_menu: плашка SURFACE_BG
 с тонкой рамкой SURFACE_BORDER и скруглёнными углами.
 
+Скругления: окно прямоугольное, углы вне скруглённой рамки
+заполняются служебным цветом и становятся прозрачными через
+-transparentcolor (Windows).
+
+Показ: окно создаётся скрытым (withdraw), настраивается,
+позиционируется, затем deiconify. Это исключает «зависание»
+на первом показе, когда Toplevel не успевает отрисоваться.
+
+Защита: у каждого окна автотаймаут 10 секунд. Если по какой-то
+причине <Leave> не дошёл — окно всё равно скроется.
+
 Публичное API:
     show()             — показать принудительно
     hide()             — скрыть принудительно
@@ -10,15 +21,14 @@
     set_text(text)     — обновить текст
     is_visible         — True, если подсказка сейчас видна
 
-Текст — строка или callable. Callable удобен для полей, значение
-которых меняется (например, «Полный путь: ...»).
+Текст — строка или callable.
 
-Одновременно видна только одна подсказка. Глобальный трекер
-гарантирует это вне зависимости от порядка <Enter>/<Leave>.
+Одновременно видна только одна подсказка.
 """
 
 from __future__ import annotations
 
+import tkinter as tk
 from collections.abc import Callable
 
 import customtkinter as ctk
@@ -44,7 +54,17 @@ _FRAME_PAD = 8
 _CURSOR_OFFSET = 12
 _SCREEN_MARGIN = 8
 
-_LEAVE_CHECK_DELAY_MS = 20
+# Задержка проверки «курсор всё ещё внутри»: если <Leave> пришёл
+# из-за перехода на дочерний виджет (например, с фрейма на лейбл),
+# подсказку не скрываем. Увеличена для стабильности после показа.
+_LEAVE_CHECK_DELAY_MS = 80
+
+# Максимальное время показа. Защита от «зависания», если <Leave>
+# по какой-то причине не дошёл.
+_SHOW_TIMEOUT_MS = 10_000
+
+# Служебный цвет для прозрачных углов.
+_TRANSPARENT_COLOR = "#ff00fe"
 
 TooltipText = str | Callable[[], str]
 
@@ -55,7 +75,6 @@ _active_tooltip: Tooltip | None = None
 
 
 def _register_active(tooltip: Tooltip) -> None:
-    """Регистрирует tooltip как активный, вытесняя предыдущий."""
     global _active_tooltip
     previous = _active_tooltip
     _active_tooltip = tooltip
@@ -70,14 +89,12 @@ def _register_active(tooltip: Tooltip) -> None:
 
 
 def _unregister_active(tooltip: Tooltip) -> None:
-    """Снимает tooltip с учёта, если он всё ещё активный."""
     global _active_tooltip
     if _active_tooltip is tooltip:
         _active_tooltip = None
 
 
 def _get_scaling(widget) -> float:
-    """Коэффициент DPI-масштабирования CTk для виджета."""
     try:
         value = ctk.ScalingTracker.get_widget_scaling(widget)
         if value and value > 0:
@@ -85,6 +102,19 @@ def _get_scaling(widget) -> float:
     except Exception as exc:
         logger.debug("ScalingTracker.get_widget_scaling: %r", exc)
     return 1.0
+
+
+def _make_transparent(window: tk.Toplevel) -> None:
+    try:
+        window.configure(bg=_TRANSPARENT_COLOR)
+    except Exception as exc:
+        logger.debug("configure(bg) у Toplevel: %r", exc)
+        return
+
+    try:
+        window.attributes("-transparentcolor", _TRANSPARENT_COLOR)
+    except Exception as exc:
+        logger.debug("-transparentcolor: %r", exc)
 
 
 class Tooltip:
@@ -103,9 +133,10 @@ class Tooltip:
         self._delay_ms = delay_ms
         self._wraplength = wraplength
 
-        self._top: ctk.CTkToplevel | None = None
+        self._top: tk.Toplevel | None = None
         self._show_job: str | None = None
         self._leave_job: str | None = None
+        self._timeout_job: str | None = None
 
         widget.bind("<Enter>", self._on_enter, add="+")
         widget.bind("<Leave>", self._on_leave, add="+")
@@ -151,12 +182,7 @@ class Tooltip:
         if self._widget is None:
             return
         self._cancel_show_job()
-        try:
-            self._leave_job = self._widget.after(
-                _LEAVE_CHECK_DELAY_MS, self._check_leave,
-            )
-        except Exception as exc:
-            logger.debug("after() при Leave tooltip: %r", exc)
+        self._schedule_leave_check()
 
     def _on_press(self, _event=None) -> None:
         self._cancel_jobs()
@@ -168,6 +194,17 @@ class Tooltip:
         self.destroy()
 
     # --- Проверка «реально ли ушли» ---
+
+    def _schedule_leave_check(self) -> None:
+        if self._widget is None:
+            return
+        self._cancel_leave_job()
+        try:
+            self._leave_job = self._widget.after(
+                _LEAVE_CHECK_DELAY_MS, self._check_leave,
+            )
+        except Exception as exc:
+            logger.debug("after() при Leave tooltip: %r", exc)
 
     def _check_leave(self) -> None:
         self._leave_job = None
@@ -212,16 +249,29 @@ class Tooltip:
             return
 
         try:
-            top = ctk.CTkToplevel(self._widget)
+            top = tk.Toplevel(self._widget)
         except Exception as exc:
             logger.error("Не удалось создать окно tooltip: %r", exc)
             return
 
-        top.overrideredirect(True)
+        # Создаём скрытым — показываем после полной настройки.
+        # Это исключает "зависание" на первом показе.
+        try:
+            top.withdraw()
+        except Exception as exc:
+            logger.debug("withdraw tooltip: %r", exc)
+
+        try:
+            top.overrideredirect(True)
+        except Exception as exc:
+            logger.debug("overrideredirect tooltip: %r", exc)
+
         try:
             top.attributes("-topmost", True)
         except Exception as exc:
             logger.debug("attributes(-topmost) у tooltip: %r", exc)
+
+        _make_transparent(top)
 
         outer = ctk.CTkFrame(
             top,
@@ -242,12 +292,29 @@ class Tooltip:
             font=get_font(_FONT_SIZE),
         ).pack(padx=_FRAME_PAD, pady=_FRAME_PAD)
 
-        top.update_idletasks()
+        try:
+            top.update_idletasks()
+        except Exception as exc:
+            logger.debug("update_idletasks tooltip: %r", exc)
 
         self._top = top
         self._position(top)
 
+        try:
+            top.deiconify()
+            top.lift()
+        except Exception as exc:
+            logger.debug("deiconify/lift tooltip: %r", exc)
+
         _register_active(self)
+
+        # Защитный таймаут: если <Leave> не сработал — скроем сами.
+        try:
+            self._timeout_job = self._widget.after(
+                _SHOW_TIMEOUT_MS, self.hide,
+            )
+        except Exception as exc:
+            logger.debug("after(таймаут) tooltip: %r", exc)
 
     def _resolve_text(self) -> str:
         if callable(self._text):
@@ -258,7 +325,7 @@ class Tooltip:
                 return ""
         return self._text or ""
 
-    def _position(self, top: ctk.CTkToplevel) -> None:
+    def _position(self, top: tk.Toplevel) -> None:
         try:
             wx = self._widget.winfo_rootx()
             wy = self._widget.winfo_rooty()
@@ -267,10 +334,16 @@ class Tooltip:
             logger.debug("геометрия виджета для tooltip: %r", exc)
             return
 
-        tw = top.winfo_reqwidth()
-        th = top.winfo_reqheight()
+        try:
+            tw = top.winfo_reqwidth()
+            th = top.winfo_reqheight()
+        except Exception as exc:
+            logger.debug("reqsize tooltip: %r", exc)
+            return
 
-        # Смещения в физических пикселях с учётом DPI.
+        if tw <= 1 or th <= 1:
+            return
+
         scaling = _get_scaling(self._widget)
         cursor_offset = round(_CURSOR_OFFSET * scaling)
         screen_margin = round(_SCREEN_MARGIN * scaling)
@@ -291,9 +364,13 @@ class Tooltip:
         if sh and y + th > sh - screen_margin:
             y = max(screen_margin, wy - th - cursor_offset)
 
-        top.geometry(f"+{x}+{y}")
+        try:
+            top.geometry(f"+{x}+{y}")
+        except Exception as exc:
+            logger.debug("geometry tooltip: %r", exc)
 
     def _close_window(self) -> None:
+        self._cancel_timeout_job()
         if self._top is None:
             return
         top = self._top
@@ -323,6 +400,16 @@ class Tooltip:
             logger.debug("after_cancel leave tooltip: %r", exc)
         self._leave_job = None
 
+    def _cancel_timeout_job(self) -> None:
+        if self._timeout_job is None or self._widget is None:
+            return
+        try:
+            self._widget.after_cancel(self._timeout_job)
+        except Exception as exc:
+            logger.debug("after_cancel timeout tooltip: %r", exc)
+        self._timeout_job = None
+
     def _cancel_jobs(self) -> None:
         self._cancel_show_job()
         self._cancel_leave_job()
+        self._cancel_timeout_job()

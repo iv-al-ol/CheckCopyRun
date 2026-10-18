@@ -2,45 +2,38 @@
 
 from __future__ import annotations
 
-import tkinter as tk
 from pathlib import Path
 
 import customtkinter as ctk
 
 from core.models import Profile
 from core.settings_store import save_settings
-from services.copy_service import CopyResult
-from services.launcher import LaunchError, launch_exe
+from services.copy_service import CopyResult, format_cancel_status
 from ui.components.profile_tile import ProfileTile
 from ui.components.scrollable import AutoHideScrollableFrame
+from ui.components.separator import make_separator
 from ui.fonts import get_font
 from ui.views.base_view import BaseView
+from ui.views.profile.profile_paths import ensure_directory
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# --- Размеры ---
 _TITLE_FONT_SIZE = 22
 _SECTION_FONT_SIZE = 15
 _BODY_FONT_SIZE = 13
 
-# --- Отступы ---
 _PAGE_PADX = 24
 _PAGE_PADY_TOP = 20
 _SEPARATOR_PADY = 8
 _BOTTOM_PADY = 20
 
-# Раскладка плиток.
 _TILE_COLUMNS = 2
 _TILE_GAP_X = 4
 _TILE_GAP_Y = 4
 _TILE_PADX = 4
 _MAX_TILES = 10
 
-_SEPARATOR_COLOR_DARK = "#4a4a4a"
-_SEPARATOR_COLOR_LIGHT = "#b8b8b8"
-
-# Заголовок блока с начальной инструкцией.
 _INTRO_TITLE = "Начало работы"
 
 _INSTRUCTION_LINES = [
@@ -50,12 +43,6 @@ _INSTRUCTION_LINES = [
     "3.  Установите необходимые опции для профиля.",
     "4.  Нажмите «Копировать», а затем «Запустить приложение».",
 ]
-
-
-def _separator_hex() -> str:
-    if ctk.get_appearance_mode() == "Dark":
-        return _SEPARATOR_COLOR_DARK
-    return _SEPARATOR_COLOR_LIGHT
 
 
 class MainView(BaseView):
@@ -73,12 +60,10 @@ class MainView(BaseView):
         self._build_separator()
         self._build_profiles_section()
 
-    # --- Жизненный цикл ---
-
     def on_show(self) -> None:
         self._rebuild_tiles()
 
-    # --- Блок «Начало работы» ---
+    # --- Инструкция ---
 
     def _build_instructions(self) -> None:
         box = ctk.CTkFrame(self, fg_color="transparent")
@@ -107,18 +92,11 @@ class MainView(BaseView):
     # --- Разделитель ---
 
     def _build_separator(self) -> None:
-        sep = tk.Frame(
-            self,
-            height=1,
-            bg=_separator_hex(),
-            bd=0,
-            highlightthickness=0,
-        )
+        sep = make_separator(self)
         sep.grid(
             row=1, column=0, sticky="ew",
             padx=_PAGE_PADX, pady=_SEPARATOR_PADY,
         )
-        sep.grid_propagate(False)
 
     # --- Раздел с профилями ---
 
@@ -216,7 +194,7 @@ class MainView(BaseView):
         except Exception as exc:
             logger.debug("check_scroll_now: %r", exc)
 
-    # --- Сортировка профилей ---
+    # --- Сортировка ---
 
     def _sorted_profiles(self) -> list[Profile]:
         profiles = list(self.window.settings.profiles)
@@ -262,14 +240,14 @@ class MainView(BaseView):
             f"Профиль {state}: {profile.display_name}",
         )
 
-    # --- Копирование ---
+    # --- Копирование (кнопка 📋) ---
 
     def _on_copy(self, pid: str) -> None:
         profile = self._find(pid)
         if profile is None:
             return
 
-        if not profile.has_source_and_dest():
+        if not profile.can_copy():
             self.window.set_status(
                 f"Профиль «{profile.display_name}» не настроен",
             )
@@ -277,6 +255,12 @@ class MainView(BaseView):
 
         if self.window.copy_service.is_running:
             self.window.set_status("Копирование уже выполняется")
+            return
+
+        if not ensure_directory(profile.destination):
+            self.window.set_status(
+                "Не удалось создать целевую директорию",
+            )
             return
 
         self.window.set_status_progress("Копирование…", 0.0)
@@ -288,6 +272,9 @@ class MainView(BaseView):
             on_progress=self._on_copy_progress,
             on_done=lambda r, p=profile: self._on_copy_done(r, p),
             on_error=self._on_copy_error,
+            hash_cache_enabled=(
+                self.window.settings.hash_cache_enabled
+            ),
         )
         if not started:
             self.window.set_status("Не удалось запустить копирование")
@@ -303,7 +290,7 @@ class MainView(BaseView):
     ) -> None:
         if result.cancelled:
             self.window.set_status_progress(
-                "Копирование отменено", None,
+                format_cancel_status(result), None,
             )
             return
 
@@ -325,36 +312,15 @@ class MainView(BaseView):
         save_settings(self.window.settings)
 
         if profile.run_after_copy and result.errors == 0:
-            self._on_run(profile.id)
+            self.window.run_with_check(profile.id)
 
     def _on_copy_error(self, message: str) -> None:
         self.window.set_status_progress(
             f"Ошибка копирования: {message}", None,
         )
 
-    # --- Запуск ---
+    # --- Запуск (кнопка ▶) ---
 
     def _on_run(self, pid: str) -> None:
-        profile = self._find(pid)
-        if profile is None:
-            return
-
-        if not profile.can_run():
-            self.window.set_status(
-                f"Профиль «{profile.display_name}» не готов: "
-                f"приложение ещё не скопировано",
-            )
-            return
-
-        full = profile.exe_full_path()
-        try:
-            launch_exe(full)
-        except LaunchError as exc:
-            self.window.set_status(f"Ошибка запуска: {exc}")
-            return
-
-        profile.touch()
-        save_settings(self.window.settings)
-        self.window.set_status(
-            f"Запущено: {Path(full).name}",
-        )
+        """Кнопка ▶ на плитке: проверка + запуск."""
+        self.window.run_with_check(pid)

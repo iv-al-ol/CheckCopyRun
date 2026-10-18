@@ -7,6 +7,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from config.constants import HASH_CACHE_ENABLED_DEFAULT
+
 
 def _new_id() -> str:
     return uuid.uuid4().hex
@@ -18,34 +20,22 @@ class Profile:
 
     id: str = field(default_factory=_new_id)
 
-    # Имя: хранится тремя полями, чтобы поддержать приоритет ручного.
     name_base: str = ""
     name_manual: str = ""
     name_auto: bool = True
 
-    # Иконка: эмодзи или абсолютный путь к файлу.
-    # icon_auto=True — иконка автоматически берётся из exe профиля,
-    # пока пользователь не выбрал что-то вручную.
     icon: str = "📁"
     icon_auto: bool = True
 
     source: str = ""
     destination: str = ""
-
-    # Путь к exe, относительный ИСХОДНОЙ директории.
     exe_relative: str = ""
 
     create_backup: bool = True
     run_after_copy: bool = False
-
-    # Проверять директорию автоматически при старте приложения.
-    # Запуск exe при этом НЕ выполняется, даже если run_after_copy=True.
     check_on_startup: bool = False
 
-    # Закреплён в главном экране — плитка всегда сверху.
     pinned: bool = False
-
-    # ISO-время последнего успешного копирования или запуска.
     last_used_at: str = ""
 
     # --- Имя ---
@@ -85,7 +75,17 @@ class Profile:
     def has_source_and_dest(self) -> bool:
         if not (self.source and self.destination):
             return False
-        return os.path.isdir(self.source) and os.path.isdir(self.destination)
+        return (
+            os.path.isdir(self.source)
+            and os.path.isdir(self.destination)
+        )
+
+    def can_copy(self) -> bool:
+        if not self.source or not os.path.isdir(self.source):
+            return False
+        if not self.destination:
+            return False
+        return True
 
     def has_exe_in_source(self) -> bool:
         path = self.exe_source_path()
@@ -104,20 +104,18 @@ class Profile:
             and self.has_exe_in_destination()
         )
 
-    # --- Обновление состояния ---
-
     def touch(self) -> None:
-        """Обновляет отметку последнего использования."""
-        self.last_used_at = datetime.now().isoformat(timespec="seconds")
+        self.last_used_at = datetime.now().isoformat(
+            timespec="seconds",
+        )
 
 
 @dataclass
 class AppSettings:
-    """Все настройки приложения, сериализуются в settings.dat."""
-
     version: int = 1
     theme: str = "dark"
     confirm_on_exit: bool = False
     window_geometry: str = ""
     last_view: str = "main"
+    hash_cache_enabled: bool = HASH_CACHE_ENABLED_DEFAULT
     profiles: list[Profile] = field(default_factory=list)

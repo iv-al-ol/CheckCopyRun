@@ -15,13 +15,15 @@
 Превью эмодзи и превью файла/иконки exe — два независимых
 виджета. В каждый момент виден только один.
 
+Разделители — ui.components.separator.make_separator.
+Загрузка картинки — ui.components.image_utils.load_ctk_image.
+
 Возвращает (icon, icon_auto) или None при отмене.
 """
 
 from __future__ import annotations
 
 import hashlib
-import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog
 
@@ -35,6 +37,8 @@ from ui.components.button import (
     VARIANT_SECONDARY,
     StyledButton,
 )
+from ui.components.image_utils import load_ctk_image
+from ui.components.separator import make_separator
 from ui.dialogs import (
     bring_to_front,
     center_on_parent,
@@ -51,9 +55,6 @@ _IMAGE_EXTS = (".png", ".ico", ".jpg", ".jpeg", ".gif", ".bmp")
 _DIALOG_WIDTH = 540
 _PREVIEW_SIZE = 64
 
-# Запас на HiDPI при загрузке исходника превью.
-_MAX_SCALING_HINT = 4
-
 _ACTION_BUTTON_WIDTH = 150
 
 _GRID_COLS = 8
@@ -66,45 +67,12 @@ _EMOJI_PALETTE: list[str] = [
 ]
 
 
-def _separator_hex() -> str:
-    if ctk.get_appearance_mode() == "Dark":
-        return "#4a4a4a"
-    return "#b8b8b8"
-
-
 def _looks_like_path(value: str) -> bool:
     if not value:
         return False
     if "/" in value or "\\" in value:
         return True
     return value.lower().endswith(_IMAGE_EXTS)
-
-
-def _load_ctk_image(path: str, logical_size: int):
-    """CTkImage: исходник с запасом на HiDPI, size — логический.
-
-    CTkImage сам умножает size на текущий scaling. Поэтому мы
-    передаём логический размер (например, 64), а исходник храним
-    увеличенным в _MAX_SCALING_HINT раз — чтобы при 200–400% DPI
-    не было мыла.
-    """
-    try:
-        from PIL import Image
-    except ImportError as exc:
-        logger.debug("Pillow недоступен для превью: %r", exc)
-        return None
-
-    try:
-        img = Image.open(path).convert("RGBA")
-        max_side = logical_size * _MAX_SCALING_HINT
-        img.thumbnail((max_side, max_side), Image.LANCZOS)
-        return ctk.CTkImage(
-            light_image=img, dark_image=img,
-            size=(logical_size, logical_size),
-        )
-    except Exception as exc:
-        logger.debug("Превью %s не построено: %r", path, exc)
-        return None
 
 
 class _IconPickerDialog:
@@ -310,18 +278,11 @@ class _IconPickerDialog:
             )
 
     def _add_separator(self, row: int) -> int:
-        sep = tk.Frame(
-            self._dialog,
-            height=1,
-            bg=_separator_hex(),
-            bd=0,
-            highlightthickness=0,
-        )
+        sep = make_separator(self._dialog)
         sep.grid(
             row=row, column=0, sticky="ew",
             padx=24, pady=(4, 12),
         )
-        sep.grid_propagate(False)
         return row + 1
 
     # --- Выбор ---
@@ -432,7 +393,7 @@ class _IconPickerDialog:
             self._show_emoji_preview(self._selected_value)
             return
 
-        img = _load_ctk_image(self._selected_value, _PREVIEW_SIZE)
+        img = load_ctk_image(self._selected_value, _PREVIEW_SIZE)
         if img is not None:
             self._show_image_preview(img)
             return

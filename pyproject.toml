@@ -16,3 +16,12 @@ dependencies = [
 # Проект — набор скриптов, а не устанавливаемый пакет:
 # uv только создаёт окружение с зависимостями и запускает файлы из корня.
 package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

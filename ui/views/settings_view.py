@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import subprocess
-import tkinter as tk
 
 import customtkinter as ctk
 
 from config.constants import (
     APP_NAME,
     APP_VERSION,
-    SEPARATOR_HEIGHT,
     SEPARATOR_PADY,
     THEME_DEFAULT,
 )
@@ -23,6 +21,7 @@ from ui.components.button import (
 from ui.components.clipboard import enable_clipboard
 from ui.components.option_menu import StyledOptionMenu
 from ui.components.scrollable import AutoHideScrollableFrame
+from ui.components.separator import make_separator
 from ui.dialogs import ask_yes_no, show_error, show_info
 from ui.fonts import get_font
 from ui.themes import THEME_LABELS, apply_theme
@@ -31,7 +30,6 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# --- Размеры / отступы ---
 _TITLE_FONT_SIZE = 22
 _SECTION_FONT_SIZE = 15
 _BODY_FONT_SIZE = 13
@@ -41,18 +39,8 @@ _PAGE_PADX = 24
 _PAGE_PADY_TOP = 20
 _SECTION_PADY_TOP = 16
 
-# Ширина кнопок в одном ряду — одинаковая.
 _ROW_BUTTON_WIDTH = 200
 _OPTION_MENU_WIDTH = 220
-
-_SEPARATOR_COLOR_DARK = "#4a4a4a"
-_SEPARATOR_COLOR_LIGHT = "#b8b8b8"
-
-
-def _separator_hex() -> str:
-    if ctk.get_appearance_mode() == "Dark":
-        return _SEPARATOR_COLOR_DARK
-    return _SEPARATOR_COLOR_LIGHT
 
 
 class SettingsView(BaseView):
@@ -161,6 +149,35 @@ class SettingsView(BaseView):
             sticky="w", padx=12, pady=(0, 10),
         )
 
+        self._hash_cache_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            section,
+            text="Использовать кэш хэшей при сравнении файлов",
+            variable=self._hash_cache_var,
+            command=self._on_hash_cache_toggle,
+        ).grid(
+            row=2, column=0, columnspan=2,
+            sticky="w", padx=12, pady=(8, 4),
+        )
+
+        ctk.CTkLabel(
+            section,
+            text=(
+                "Ускоряет повторные копирования: файлы сравниваются "
+                "по размеру и времени изменения, хэш пересчитывается "
+                "только при изменениях. Отключите, если нужна "
+                "побайтовая сверка при каждом запуске."
+            ),
+            anchor="w",
+            justify="left",
+            wraplength=520,
+            text_color=("gray40", "gray60"),
+            font=get_font(_HINT_FONT_SIZE),
+        ).grid(
+            row=3, column=0, columnspan=2,
+            sticky="w", padx=12, pady=(0, 10),
+        )
+
     # --- Секция: Данные ---
 
     def _build_data_section(self) -> None:
@@ -257,11 +274,7 @@ class SettingsView(BaseView):
     # --- Утилита: каркас секции ---
 
     def _make_section(self, title: str) -> ctk.CTkFrame:
-        """Создаёт визуальный блок с заголовком и возвращает его тело.
-
-        Возвращаемый фрейм — сетка из двух колонок (0 — метки,
-        1 — значения). Он уже добавлен в прокручиваемое тело.
-        """
+        """Создаёт визуальный блок с заголовком и возвращает тело."""
         header = ctk.CTkLabel(
             self._scroll,
             text=title,
@@ -276,16 +289,8 @@ class SettingsView(BaseView):
         body.grid(sticky="ew", padx=0, pady=(0, 8))
         body.grid_columnconfigure(1, weight=1)
 
-        # Разделитель под секцией — визуальный ритм.
-        sep = tk.Frame(
-            self._scroll,
-            height=SEPARATOR_HEIGHT,
-            bg=_separator_hex(),
-            bd=0,
-            highlightthickness=0,
-        )
+        sep = make_separator(self._scroll)
         sep.grid(sticky="ew", padx=4, pady=SEPARATOR_PADY)
-        sep.grid_propagate(False)
 
         return body
 
@@ -294,19 +299,18 @@ class SettingsView(BaseView):
     def _sync_from_settings(self) -> None:
         s = self.window.settings
 
-        # Тема
         self._theme_var.set(
             THEME_LABELS.get(s.theme, THEME_LABELS["system"]),
         )
-
-        # Поведение
         self._confirm_exit_var.set(bool(s.confirm_on_exit))
+        self._hash_cache_var.set(bool(s.hash_cache_enabled))
 
-        # Путь к settings.dat
         try:
             path = str(get_settings_path())
         except Exception as exc:
-            logger.debug("Не удалось получить путь settings.dat: %r", exc)
+            logger.debug(
+                "Не удалось получить путь settings.dat: %r", exc,
+            )
             path = "—"
         self._set_readonly_text(self._path_entry, path)
 
@@ -338,6 +342,13 @@ class SettingsView(BaseView):
         state = "включено" if enabled else "выключено"
         self.window.set_status(f"Подтверждение выхода {state}")
 
+    def _on_hash_cache_toggle(self) -> None:
+        enabled = bool(self._hash_cache_var.get())
+        self.window.settings.hash_cache_enabled = enabled
+        self.window.save_settings_now()
+        state = "включён" if enabled else "выключен"
+        self.window.set_status(f"Кэш хэшей {state}")
+
     def _on_open_folder(self) -> None:
         path = get_settings_path()
         folder = path.parent
@@ -358,7 +369,6 @@ class SettingsView(BaseView):
 
         try:
             if path.exists():
-                # Выделить файл в проводнике.
                 subprocess.Popen(
                     ["explorer", "/select,", str(path)],
                 )

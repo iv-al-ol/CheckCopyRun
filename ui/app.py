@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import ctypes
-import re
 from pathlib import Path
 
 import customtkinter as ctk
 
 from config.constants import (
     APP_TITLE,
-    DEFAULT_PROFILE_NAME_PREFIX,
     THEME_DEFAULT,
     WINDOW_MIN_HEIGHT,
     WINDOW_MIN_WIDTH,
@@ -18,15 +15,15 @@ from config.constants import (
 from core.models import AppSettings, Profile
 from core.paths import get_asset_path
 from core.settings_store import load_settings, save_settings
-from services.copy_service import CopyResult, CopyService
-from ui.components.context_menu import ContextMenu
-from ui.components.icon_picker import pick_icon
-from ui.components.status_bar import StatusBar
-from ui.dialogs import ask_yes_no
-from ui.dialogs.profile_dialogs import (
-    ask_delete_profile,
-    ask_profile_name,
+from services.copy_service import (
+    CopyResult,
+    CopyService,
+    format_cancel_status,
 )
+from services.startup_check import StartupCheckQueue
+from ui.components.context_menu import ContextMenu
+from ui.components.status_bar import StatusBar
+from ui.dialogs import ask_yes_no, show_error
 from ui.layouts.main_layout import MainLayout
 from ui.layouts.sidebar import (
     KEY_MAIN,
@@ -35,35 +32,27 @@ from ui.layouts.sidebar import (
     profile_key,
 )
 from ui.navigation.router import Router
+from ui.profile_actions import ProfileActionController
 from ui.themes import apply_theme
 from ui.views.main_view import MainView
-from ui.views.profile_view import ProfileView
+from ui.views.profile import ProfileView
+from ui.views.profile.profile_paths import (
+    ensure_directory,
+    source_error,
+)
 from ui.views.settings_view import SettingsView
+from ui.window_geometry import (
+    WindowGeometryTracker,
+    apply_default_geometry,
+    capture_geometry,
+    is_valid_geometry_string,
+    try_restore_geometry,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Регулярка с группами: width, height, x, y.
-_GEOMETRY_RE = re.compile(r"^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$")
-
 _STARTUP_CHECK_DELAY_MS = 700
-_STARTUP_NEXT_DELAY_MS = 80
-
-# Задержка перед первичной фиксацией last_visible_rect — чтобы
-# окно успело получить финальную геометрию от оконного менеджера.
-_INITIAL_RECT_DELAY_MS = 80
-
-# Минимально видимая часть окна на экране при восстановлении.
-_MIN_VISIBLE_PX = 100
-
-# Индексы GetSystemMetrics для виртуального экрана (все мониторы).
-_SM_XVIRTUALSCREEN = 76
-_SM_YVIRTUALSCREEN = 77
-_SM_CXVIRTUALSCREEN = 78
-_SM_CYVIRTUALSCREEN = 79
-
-# Маркер свёрнутого окна Windows: координаты (-32000, -32000).
-_MINIMIZED_COORD_MARKER = -30000
 
 
 class MainWindow(ctk.CTk):
@@ -76,23 +65,15 @@ class MainWindow(ctk.CTk):
         self.title(APP_TITLE)
         self.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
 
-        self._active_profile_id: str | None = None
+        self.active_profile_id: str | None = None
         self._icon_photo = None
         self._closing = False
-
-        # Последняя видимая геометрия окна. Используется диалогами,
-        # когда окно свёрнуто или скрыто в трей: они открываются
-        # по центру монитора, где окно было в последний раз.
-        self._last_visible_rect: tuple[int, int, int, int] | None = None
-
-        self._startup_queue: list[Profile] = []
-        self._startup_total = 0
-        self._startup_index = 0
-        self._startup_running = False
 
         self.copy_service = CopyService(
             scheduler=lambda fn: self.after(0, fn),
         )
+        self.profile_actions = ProfileActionController(self)
+        self._geometry_tracker = WindowGeometryTracker(self)
 
         self._apply_window_icon()
         self._restore_or_default_geometry()
@@ -117,14 +98,15 @@ class MainWindow(ctk.CTk):
         self.refresh_sidebar()
         self._restore_last_view()
 
+        self.startup_checker = StartupCheckQueue(
+            window=self,
+            copy_service=self.copy_service,
+            set_status_progress=self.set_status_progress,
+            on_finish=self.refresh_main_view,
+        )
+
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
-
-        # Отслеживаем перемещение / изменение размера окна. Плюс
-        # первичная фиксация через небольшую задержку — до неё
-        # winfo_* могут отдавать промежуточные значения.
-        self.bind("<Configure>", self._on_window_configure, add="+")
-        self.after(_INITIAL_RECT_DELAY_MS, self._on_window_configure)
-
+        self._geometry_tracker.start()
         self.after(_STARTUP_CHECK_DELAY_MS, self._run_startup_check)
 
     # --- Иконка окна ---
@@ -156,221 +138,28 @@ class MainWindow(ctk.CTk):
         except Exception as exc:
             logger.warning("iconphoto не удался: %r", exc)
 
-    # --- DPI и виртуальный экран ---
-
-    def _get_dpi_scaling(self) -> float:
-        try:
-            value = ctk.ScalingTracker.get_window_dpi_scaling(self)
-            if value and value > 0:
-                return float(value)
-        except Exception as exc:
-            logger.debug("ScalingTracker недоступен: %r", exc)
-        return 1.0
-
-    def _get_virtual_screen_physical(
-        self,
-    ) -> tuple[int, int, int, int] | None:
-        try:
-            user32 = ctypes.WinDLL("user32", use_last_error=True)
-        except OSError as exc:
-            logger.debug("user32 недоступен: %r", exc)
-            return None
-
-        try:
-            x = int(user32.GetSystemMetrics(_SM_XVIRTUALSCREEN))
-            y = int(user32.GetSystemMetrics(_SM_YVIRTUALSCREEN))
-            w = int(user32.GetSystemMetrics(_SM_CXVIRTUALSCREEN))
-            h = int(user32.GetSystemMetrics(_SM_CYVIRTUALSCREEN))
-        except Exception as exc:
-            logger.debug("GetSystemMetrics(VIRTUALSCREEN): %r", exc)
-            return None
-
-        if w <= 0 or h <= 0:
-            return None
-        return x, y, w, h
-
     # --- Геометрия ---
 
     def _restore_or_default_geometry(self) -> None:
         saved = self.settings.window_geometry
-        if saved and _GEOMETRY_RE.match(saved):
-            if self._try_restore_geometry(saved):
+        if saved and is_valid_geometry_string(saved):
+            if try_restore_geometry(self, saved):
                 return
             logger.debug(
                 "Сохранённая геометрия %r не применена — дефолт",
                 saved,
             )
-
-        self._apply_default_geometry()
-
-    def _apply_default_geometry(self) -> None:
-        w = WINDOW_MIN_WIDTH
-        h = WINDOW_MIN_HEIGHT
-
-        scaling = self._get_dpi_scaling() or 1.0
-        try:
-            sw = int(self.winfo_screenwidth() / scaling)
-            sh = int(self.winfo_screenheight() / scaling)
-        except Exception as exc:
-            logger.debug("размер экрана недоступен: %r", exc)
-            sw, sh = w, h
-
-        x = max(0, (sw - w) // 2)
-        y = max(0, (sh - h) // 2)
-        self.geometry(f"{w}x{h}+{x}+{y}")
-
-    def _try_restore_geometry(self, geometry: str) -> bool:
-        parsed = self._parse_geometry(geometry)
-        if parsed is None:
-            return False
-
-        w, h, x, y = parsed
-
-        if w < WINDOW_MIN_WIDTH or h < WINDOW_MIN_HEIGHT:
-            logger.debug(
-                "Сохранённый размер %dx%d меньше минимального",
-                w, h,
-            )
-            return False
-
-        if not self._is_inside_virtual_screen(x, y, w, h):
-            logger.debug(
-                "Окно %dx%d+%d+%d вне видимой области", w, h, x, y,
-            )
-            return False
-
-        try:
-            self.geometry(geometry)
-            logger.debug("Восстановлена геометрия: %r", geometry)
-            return True
-        except Exception as exc:
-            logger.debug(
-                "geometry(%r) не сработал: %r", geometry, exc,
-            )
-            return False
-
-    def _is_inside_virtual_screen(
-        self, x: int, y: int, w: int, h: int,
-    ) -> bool:
-        scaling = self._get_dpi_scaling() or 1.0
-
-        vs = self._get_virtual_screen_physical()
-        if vs is None:
-            try:
-                sw_phys = self.winfo_screenwidth()
-                sh_phys = self.winfo_screenheight()
-            except Exception as exc:
-                logger.debug("размер экрана недоступен: %r", exc)
-                return True
-            vs_x, vs_y, vs_w, vs_h = 0, 0, sw_phys, sh_phys
-        else:
-            vs_x, vs_y, vs_w, vs_h = vs
-
-        vs_x = int(vs_x / scaling)
-        vs_y = int(vs_y / scaling)
-        vs_w = int(vs_w / scaling)
-        vs_h = int(vs_h / scaling)
-
-        vs_right = vs_x + vs_w
-        vs_bottom = vs_y + vs_h
-
-        right = x + w
-        bottom = y + h
-
-        overlap_w = min(right, vs_right) - max(x, vs_x)
-        overlap_h = min(bottom, vs_bottom) - max(y, vs_y)
-
-        return (
-            overlap_w >= _MIN_VISIBLE_PX
-            and overlap_h >= _MIN_VISIBLE_PX
-        )
-
-    @staticmethod
-    def _parse_geometry(
-        geometry: str,
-    ) -> tuple[int, int, int, int] | None:
-        match = _GEOMETRY_RE.match(geometry)
-        if not match:
-            return None
-        try:
-            w = int(match.group(1))
-            h = int(match.group(2))
-            x = int(match.group(3))
-            y = int(match.group(4))
-        except (TypeError, ValueError) as exc:
-            logger.debug("parse_geometry: %r", exc)
-            return None
-        return w, h, x, y
+        apply_default_geometry(self)
 
     def _save_geometry(self) -> None:
-        try:
-            w = self.winfo_width()
-            h = self.winfo_height()
-            x = self.winfo_x()
-            y = self.winfo_y()
-        except Exception as exc:
-            logger.debug("Не удалось прочитать геометрию окна: %r", exc)
-            return
-
-        if w <= 1 or h <= 1:
-            return
-
-        scaling = self._get_dpi_scaling() or 1.0
-        lw = int(round(w / scaling))
-        lh = int(round(h / scaling))
-        lx = int(round(x / scaling))
-        ly = int(round(y / scaling))
-
-        self.settings.window_geometry = f"{lw}x{lh}+{lx}+{ly}"
-
-    # --- Позиция окна для диалогов ---
-
-    def _on_window_configure(self, event=None) -> None:
-        """Обновляет _last_visible_rect при перемещении / ресайзе.
-
-        Сохраняем только когда окно в нормальном состоянии: при
-        минимизации Windows ставит координаты-маркер (-32000).
-        """
-        if event is not None and getattr(event, "widget", None) is not self:
-            return
-
-        try:
-            state = self.state()
-        except Exception as exc:
-            logger.debug("state(): %r", exc)
-            return
-
-        if state != "normal":
-            return
-
-        try:
-            x = int(self.winfo_rootx())
-            y = int(self.winfo_rooty())
-            w = int(self.winfo_width())
-            h = int(self.winfo_height())
-        except Exception as exc:
-            logger.debug("геометрия last_visible_rect: %r", exc)
-            return
-
-        if w <= 1 or h <= 1:
-            return
-
-        if x <= _MINIMIZED_COORD_MARKER or y <= _MINIMIZED_COORD_MARKER:
-            return
-
-        self._last_visible_rect = (x, y, x + w, y + h)
+        geometry = capture_geometry(self)
+        if geometry is not None:
+            self.settings.window_geometry = geometry
 
     def get_last_visible_rect(
         self,
     ) -> tuple[int, int, int, int] | None:
-        """Последний видимый прямоугольник окна в координатах Tk.
-
-        Используется диалогами, когда окно свёрнуто или скрыто в
-        трей: чтобы открыться по центру монитора, на котором окно
-        было в последний раз. Возвращает None, если координаты ещё
-        не зафиксированы.
-        """
-        return self._last_visible_rect
+        return self._geometry_tracker.get_last_visible_rect()
 
     # --- Роутер ---
 
@@ -395,7 +184,7 @@ class MainWindow(ctk.CTk):
         key = self.settings.last_view or KEY_MAIN
         pid = parse_profile_key(key)
 
-        if pid is not None and self._find_profile(pid) is None:
+        if pid is not None and self.profile_actions.find(pid) is None:
             key = KEY_MAIN
         elif pid is None and key not in (KEY_MAIN, KEY_SETTINGS):
             key = KEY_MAIN
@@ -407,10 +196,10 @@ class MainWindow(ctk.CTk):
     def _on_sidebar_select(self, key: str) -> None:
         try:
             if key == KEY_MAIN:
-                self._active_profile_id = None
+                self.active_profile_id = None
                 self.router.show("main")
             elif key == KEY_SETTINGS:
-                self._active_profile_id = None
+                self.active_profile_id = None
                 self.router.show("settings")
             else:
                 pid = parse_profile_key(key)
@@ -425,7 +214,7 @@ class MainWindow(ctk.CTk):
             logger.error("Ошибка навигации %r: %r", key, exc)
 
     def _show_profile(self, pid: str) -> None:
-        self._active_profile_id = pid
+        self.active_profile_id = pid
 
         view = self.router.get_or_create("profile")
         if view is None:
@@ -448,13 +237,23 @@ class MainWindow(ctk.CTk):
     def show_main(self) -> None:
         self._on_sidebar_select(KEY_MAIN)
 
-    # --- Публичное API для views ---
+    def is_parent_visible(self) -> bool:
+        try:
+            return self.state() in ("normal", "zoomed")
+        except Exception as exc:
+            logger.debug("state(): %r", exc)
+            return True
+
+    # --- Публичное API ---
 
     def save_settings_now(self) -> None:
         try:
             save_settings(self.settings)
         except Exception as exc:
             logger.error("Не удалось сохранить настройки: %r", exc)
+
+    def refresh_sidebar(self) -> None:
+        self.layout.sidebar.rebuild_profiles(self.settings.profiles)
 
     def refresh_main_view(self) -> None:
         view = self.router.get_view("main")
@@ -472,14 +271,13 @@ class MainWindow(ctk.CTk):
             if self.copy_service.is_running:
                 self.copy_service.cancel()
 
-            self._startup_queue.clear()
-            self._startup_running = False
+            self.startup_checker.cancel()
 
             self.settings = AppSettings()
             apply_theme(self.settings.theme or THEME_DEFAULT)
             save_settings(self.settings)
 
-            self._active_profile_id = None
+            self.active_profile_id = None
             self.layout.sidebar.set_active(KEY_MAIN)
             self.refresh_sidebar()
             self.router.show("main")
@@ -492,7 +290,9 @@ class MainWindow(ctk.CTk):
                     try:
                         on_show()
                     except Exception as exc:
-                        logger.debug("on_show SettingsView: %r", exc)
+                        logger.debug(
+                            "on_show SettingsView: %r", exc,
+                        )
 
             self.set_status(
                 "Настройки сброшены к значениям по умолчанию",
@@ -507,301 +307,189 @@ class MainWindow(ctk.CTk):
     def _run_startup_check(self) -> None:
         if self._closing:
             return
+        self.startup_checker.start(self.settings.profiles)
 
-        candidates = [
-            p for p in self.settings.profiles
-            if p.check_on_startup and p.has_source_and_dest()
-        ]
-        if not candidates:
+    # --- Проверка + запуск (кнопка ▶) ---
+
+    def run_with_check(self, pid: str) -> None:
+        """Копирует директорию и запускает приложение.
+
+        Используется кнопкой ▶ в сайдбаре и на плитке главной.
+        Соответствует тултипу «Проверить директорию и запустить
+        приложение»: сначала копирование, потом запуск. При
+        ошибках копирования запуск не выполняется.
+        """
+        profile = self.profile_actions.find(pid)
+        if profile is None:
             return
 
-        candidates.sort(
-            key=lambda p: p.last_used_at or "", reverse=True,
-        )
-
-        self._startup_queue = list(candidates)
-        self._startup_total = len(candidates)
-        self._startup_index = 0
-        self._startup_running = True
-
-        logger.info(
-            "Автопроверка: %d профил(ей) в очереди", self._startup_total,
-        )
-        self._process_next_startup()
-
-    def _process_next_startup(self) -> None:
-        if self._closing:
+        if self.copy_service.is_running:
+            self.set_status("Копирование уже выполняется")
             return
 
-        if not self._startup_queue:
-            self._startup_running = False
-            self.set_status_progress("Автопроверка завершена", None)
-            logger.info("Автопроверка: всё завершено")
-            self.refresh_main_view()
+        src_err = source_error(profile.source)
+        if src_err is not None:
+            show_error(
+                self,
+                "Нельзя запустить",
+                src_err,
+                parent_visible=self.is_parent_visible(),
+            )
             return
 
-        profile = self._startup_queue.pop(0)
-        self._startup_index += 1
+        if not profile.destination:
+            show_error(
+                self,
+                "Нельзя запустить",
+                "Целевая директория не задана.",
+                parent_visible=self.is_parent_visible(),
+            )
+            return
 
-        header = (
-            f"Автопроверка {self._startup_index}/{self._startup_total}: "
-            f"{profile.display_name}"
-        )
-        self.set_status_progress(header, 0.0)
+        if not ensure_directory(profile.destination):
+            show_error(
+                self,
+                "Нельзя запустить",
+                (
+                    "Не удалось создать целевую директорию:\n"
+                    f"{profile.destination}\n\n"
+                    "Проверьте, что диск доступен и есть права "
+                    "на запись."
+                ),
+                parent_visible=self.is_parent_visible(),
+            )
+            return
+
+        self.set_status_progress("Копирование…", 0.0)
 
         started = self.copy_service.start(
             source=profile.source,
             destination=profile.destination,
             create_backup=profile.create_backup,
-            on_progress=self._on_startup_progress,
-            on_done=lambda r, p=profile: self._on_startup_done(r, p),
-            on_error=lambda msg, p=profile: self._on_startup_error(
-                msg, p,
-            ),
+            on_progress=self._on_run_check_progress,
+            on_done=lambda r, p=profile: self._on_run_check_done(r, p),
+            on_error=self._on_run_check_error,
+            hash_cache_enabled=self.settings.hash_cache_enabled,
         )
         if not started:
-            logger.warning(
-                "Автопроверка: профиль %s пропущен (start=False)",
-                profile.display_name,
-            )
-            self.after(
-                _STARTUP_NEXT_DELAY_MS, self._process_next_startup,
-            )
+            self.set_status("Не удалось запустить копирование")
 
-    def _on_startup_progress(self, progress) -> None:
-        header = (
-            f"Автопроверка {self._startup_index}/{self._startup_total}"
-        )
+    def _on_run_check_progress(self, progress) -> None:
         self.set_status_progress(
-            header, progress.percent / 100.0,
+            f"Копирование: {progress.processed}/{progress.total}",
+            progress.percent / 100.0,
         )
 
-    def _on_startup_done(
+    def _on_run_check_done(
         self, result: CopyResult, profile: Profile,
     ) -> None:
-        if self._closing:
+        if result.cancelled:
+            self.set_status_progress(
+                format_cancel_status(result), None,
+            )
             return
 
-        if result.cancelled:
-            logger.info("Автопроверка прервана")
-            self._startup_queue.clear()
-            self._startup_running = False
+        if result.errors > 0:
+            self.set_status_progress(
+                f"Копирование с {result.errors} ошибками — "
+                f"запуск отменён",
+                None,
+            )
+            show_error(
+                self,
+                "Нельзя запустить приложение",
+                (
+                    f"Копирование завершилось с "
+                    f"{result.errors} ошибк(ами).\n\n"
+                    "Подробности — в логе."
+                ),
+                parent_visible=self.is_parent_visible(),
+            )
             return
+
+        parts = [
+            f"скопировано {result.copied}",
+            f"пропущено {result.skipped}",
+        ]
+        self.set_status_progress(
+            "Копирование завершено: " + ", ".join(parts),
+            None,
+        )
 
         profile.touch()
         save_settings(self.settings)
 
-        logger.info(
-            "Автопроверка %s: скопировано %d, пропущено %d, "
-            "ошибок %d",
-            profile.display_name,
-            result.copied, result.skipped, result.errors,
-        )
-
-        self.after(
-            _STARTUP_NEXT_DELAY_MS, self._process_next_startup,
-        )
-
-    def _on_startup_error(
-        self, message: str, profile: Profile,
-    ) -> None:
-        if self._closing:
-            return
-
-        logger.error(
-            "Автопроверка %s: %s", profile.display_name, message,
-        )
-
-        self.after(
-            _STARTUP_NEXT_DELAY_MS, self._process_next_startup,
-        )
-
-    # --- Профили: поиск и нумерация ---
-
-    def _find_profile(self, pid: str) -> Profile | None:
-        for p in self.settings.profiles:
-            if p.id == pid:
-                return p
-        return None
-
-    def _next_profile_number(self) -> int:
-        prefix = DEFAULT_PROFILE_NAME_PREFIX + " "
-        max_n = 0
-        for p in self.settings.profiles:
-            base = p.name_base
-            if not base.startswith(prefix):
-                continue
-            try:
-                n = int(base[len(prefix):])
-            except ValueError as exc:
-                logger.debug(
-                    "Не разобран номер профиля %r: %r", base, exc,
-                )
-                continue
-            if n > max_n:
-                max_n = n
-        return max_n + 1
-
-    def refresh_sidebar(self) -> None:
-        self.layout.sidebar.rebuild_profiles(self.settings.profiles)
-
-    # --- Профили: действия ---
-
-    def _on_add_profile(self) -> None:
-        n = self._next_profile_number()
-        profile = Profile(
-            name_base=f"{DEFAULT_PROFILE_NAME_PREFIX} {n}",
-            name_auto=True,
-            icon_auto=True,
-        )
-        self.settings.profiles.append(profile)
-        save_settings(self.settings)
-        self.refresh_sidebar()
-        self.refresh_main_view()
-        self._on_sidebar_select(profile_key(profile.id))
-        self.set_status(f"Создан {profile.display_name}")
-
-    def _on_run_profile(self, pid: str) -> None:
-        profile = self._find_profile(pid)
-        if profile is None:
-            self.set_status(f"Профиль {pid[:8]} не найден")
+        full = profile.exe_full_path()
+        if not full or not Path(full).is_file():
+            show_error(
+                self,
+                "Нельзя запустить приложение",
+                (
+                    "Файл приложения не найден:\n"
+                    f"{full or '—'}\n\n"
+                    "Убедитесь, что приложение было в исходной "
+                    "директории и успешно скопировано."
+                ),
+                parent_visible=self.is_parent_visible(),
+            )
             return
 
         from services.launcher import LaunchError, launch_exe
         try:
-            full = profile.exe_full_path()
             launch_exe(full)
         except LaunchError as exc:
-            self.set_status(f"Ошибка запуска: {exc}")
+            show_error(
+                self,
+                "Ошибка запуска",
+                str(exc),
+                parent_visible=self.is_parent_visible(),
+            )
             return
 
-        profile.touch()
-        save_settings(self.settings)
-        self.set_status(f"Запущено: {profile.display_name}")
+        self.set_status(f"Запущено: {Path(full).name}")
+
+    def _on_run_check_error(self, message: str) -> None:
+        self.set_status_progress(f"Ошибка: {message}", None)
+        show_error(
+            self,
+            "Ошибка копирования",
+            message,
+            parent_visible=self.is_parent_visible(),
+        )
+
+    # --- Действия с профилями: тонкие обёртки над контроллером ---
+
+    def _on_add_profile(self) -> None:
+        self.profile_actions.add()
 
     def _on_profile_context(self, pid: str, x: int, y: int) -> None:
-        profile = self._find_profile(pid)
+        profile = self.profile_actions.find(pid)
         if profile is None:
             return
 
         menu = ContextMenu(self)
         menu.add_item(
             "Переименовать",
-            lambda: self._rename_profile(pid),
+            lambda: self.profile_actions.rename(pid),
             icon="✏️",
         )
         menu.add_item(
             "Сменить иконку",
-            lambda: self._change_icon(pid),
+            lambda: self.profile_actions.change_icon(pid),
             icon="🎨",
         )
         menu.add_separator()
         menu.add_item(
             "Удалить",
-            lambda: self._delete_profile(pid),
+            lambda: self.profile_actions.delete(pid),
             icon="🗑",
             danger=True,
         )
         menu.show(x, y)
 
-    def _rename_profile(self, pid: str) -> None:
-        profile = self._find_profile(pid)
-        if profile is None:
-            return
-
-        new_name = ask_profile_name(
-            self, profile.display_name, self._parent_visible(),
-        )
-        if new_name is None:
-            return
-
-        profile.name_manual = new_name
-        profile.name_auto = False
-        save_settings(self.settings)
-        self.refresh_sidebar()
-        self._reload_profile_view_if_open(pid)
-        self.refresh_main_view()
-        self.set_status(f"Профиль переименован: {new_name}")
-
-    def _change_icon(self, pid: str) -> None:
-        profile = self._find_profile(pid)
-        if profile is None:
-            return
-
-        exe_path = self._resolve_exe_path(profile)
-        result = pick_icon(
-            parent=self,
-            current_icon=profile.icon,
-            current_icon_auto=profile.icon_auto,
-            exe_path=exe_path,
-            parent_visible=self._parent_visible(),
-        )
-        if result is None:
-            return
-
-        profile.icon, profile.icon_auto = result
-        save_settings(self.settings)
-        self.refresh_sidebar()
-        self._reload_profile_view_if_open(pid)
-        self.refresh_main_view()
-        self.set_status("Иконка профиля обновлена")
-
-    def _delete_profile(self, pid: str) -> None:
-        profile = self._find_profile(pid)
-        if profile is None:
-            return
-
-        if not ask_delete_profile(
-            self, profile.display_name, self._parent_visible(),
-        ):
-            return
-
-        removed_name = profile.display_name
-        self.settings.profiles = [
-            p for p in self.settings.profiles if p.id != pid
-        ]
-        save_settings(self.settings)
-        self.refresh_sidebar()
-        self.refresh_main_view()
-
-        if self._active_profile_id == pid:
-            self._active_profile_id = None
-            self.show_main()
-
-        self.set_status(f"Профиль удалён: {removed_name}")
-
-    # --- Вспомогательное ---
-
-    def _reload_profile_view_if_open(self, pid: str) -> None:
-        if self._active_profile_id != pid:
-            return
-        view = self.router.get_view("profile")
-        if view is None:
-            return
-        setter = getattr(view, "set_profile", None)
-        if callable(setter):
-            try:
-                setter(pid)
-            except Exception as exc:
-                logger.error(
-                    "Перезагрузка ProfileView упала: %r", exc,
-                )
-
-    def _resolve_exe_path(self, profile: Profile) -> Path | None:
-        full = profile.exe_source_path()
-        if not full:
-            return None
-        p = Path(full)
-        if not p.is_file():
-            return None
-        return p
-
-    def _parent_visible(self) -> bool:
-        try:
-            return self.state() in ("normal", "zoomed")
-        except Exception as exc:
-            logger.debug("state(): %r", exc)
-            return True
+    def _on_run_profile(self, pid: str) -> None:
+        """Кнопка ▶ в сайдбаре: проверка + запуск."""
+        self.run_with_check(pid)
 
     # --- Статус-бар ---
 
@@ -811,7 +499,9 @@ class MainWindow(ctk.CTk):
     def set_progress(self, value: float | None) -> None:
         self.after(0, lambda: self.status_bar.show_progress(value))
 
-    def set_status_progress(self, text: str, value: float | None) -> None:
+    def set_status_progress(
+        self, text: str, value: float | None,
+    ) -> None:
         def apply() -> None:
             self.status_bar.set_text(text)
             self.status_bar.show_progress(value)
@@ -830,18 +520,20 @@ class MainWindow(ctk.CTk):
                 "Закрыть CheckCopyRun?",
                 yes_text="Закрыть",
                 no_text="Отмена",
-                parent_visible=self._parent_visible(),
+                parent_visible=self.is_parent_visible(),
             )
             if not confirmed:
                 return
 
         self._closing = True
-        self._startup_queue.clear()
+        self.startup_checker.cancel()
         try:
             if self.copy_service.is_running:
                 self.copy_service.cancel()
             self._save_geometry()
-            self.settings.last_view = self.router.current or KEY_MAIN
+            self.settings.last_view = (
+                self.router.current or KEY_MAIN
+            )
             save_settings(self.settings)
         except Exception as exc:
             logger.error("Ошибка сохранения при закрытии: %r", exc)

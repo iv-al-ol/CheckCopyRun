@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import tkinter as tk
 from collections.abc import Callable
 
 import customtkinter as ctk
 
 from config.constants import (
     DEFAULT_PROFILE_ICON,
-    SEPARATOR_HEIGHT,
     SEPARATOR_PADY,
     SIDEBAR_ITEM_HEIGHT,
     SIDEBAR_ITEM_PADY_TOP,
@@ -17,9 +15,15 @@ from config.constants import (
     SIDEBAR_WIDTH,
 )
 from core.models import Profile
+from ui.components.image_utils import (
+    load_ctk_image,
+    looks_like_image_path,
+)
 from ui.components.scrollable import AutoHideScrollableFrame
+from ui.components.separator import make_separator
 from ui.components.tooltip import Tooltip
 from ui.fonts import get_emoji_font, get_font
+from ui.palette import SUCCESS, SUCCESS_HOVER, SUCCESS_TEXT
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -60,29 +64,8 @@ _ICON_WRAPPER_PADX_RIGHT = 4
 
 _SEPARATOR_PADX = 12
 
-_MAX_SCALING_HINT = 4
-
 _RUN_TOOLTIP_TEXT = "Проверить директорию и запустить приложение"
 _RUN_TOOLTIP_DELAY_MS = 400
-
-_ICON_FILE_EXTS = (".png", ".ico", ".jpg", ".jpeg", ".gif", ".bmp")
-
-# Текст кнопки добавления профиля — единая точка правки.
-_ADD_PROFILE_LABEL = "Добавить профиль"
-
-
-def _is_icon_file(icon: str) -> bool:
-    if not icon:
-        return False
-    if "/" in icon or "\\" in icon:
-        return True
-    return icon.lower().endswith(_ICON_FILE_EXTS)
-
-
-def _separator_hex() -> str:
-    if ctk.get_appearance_mode() == "Dark":
-        return "#4a4a4a"
-    return "#b8b8b8"
 
 
 class _NavItem(ctk.CTkFrame):
@@ -127,7 +110,11 @@ class _NavItem(ctk.CTkFrame):
             padx=(_ICON_WRAPPER_PADX_LEFT, _ICON_WRAPPER_PADX_RIGHT),
         )
 
-        image = self._build_image(icon)
+        image = (
+            load_ctk_image(icon, _ICON_WRAPPER_SIZE)
+            if looks_like_image_path(icon)
+            else None
+        )
         if image is not None:
             icon_label: ctk.CTkLabel = ctk.CTkLabel(
                 icon_wrapper, image=image, text="",
@@ -164,11 +151,13 @@ class _NavItem(ctk.CTkFrame):
                 corner_radius=6,
                 font=get_font(11),
                 command=on_run,
+                fg_color=SUCCESS,
+                hover_color=SUCCESS_HOVER,
+                text_color=SUCCESS_TEXT,
             )
             self._run_button.grid(
                 row=0, column=2, padx=(0, _RUN_BUTTON_PADX),
             )
-
             if run_tooltip:
                 self._run_tooltip = Tooltip(
                     self._run_button,
@@ -217,7 +206,6 @@ class _NavItem(ctk.CTkFrame):
         except Exception as exc:
             logger.debug("winfo_containing: %r", exc)
             return
-
         if under is None or not self._is_inside(under):
             if self._hover:
                 self._hover = False
@@ -242,28 +230,6 @@ class _NavItem(ctk.CTkFrame):
             self.configure(fg_color=color)
         except Exception as exc:
             logger.debug("configure(fg_color): %r", exc)
-
-    @staticmethod
-    def _build_image(icon: str):
-        if not _is_icon_file(icon):
-            return None
-        try:
-            from PIL import Image
-            img = Image.open(icon).convert("RGBA")
-            max_side = _ICON_WRAPPER_SIZE * _MAX_SCALING_HINT
-            img.thumbnail((max_side, max_side), Image.LANCZOS)
-            return ctk.CTkImage(
-                light_image=img, dark_image=img,
-                size=(_ICON_WRAPPER_SIZE, _ICON_WRAPPER_SIZE),
-            )
-        except ImportError as exc:
-            logger.debug(
-                "Pillow недоступен для иконки %s: %r", icon, exc,
-            )
-            return None
-        except Exception as exc:
-            logger.debug("Иконка %s не загружена: %r", icon, exc)
-            return None
 
 
 class Sidebar(ctk.CTkFrame):
@@ -313,7 +279,7 @@ class Sidebar(ctk.CTkFrame):
         add_item = _NavItem(
             self,
             icon="➕",
-            text=_ADD_PROFILE_LABEL,
+            text="Добавить профиль",
             on_click=self._safe_call_noarg(
                 self._on_add_profile, "add profile",
             ),
@@ -342,18 +308,11 @@ class Sidebar(ctk.CTkFrame):
         return scroll
 
     def _add_separator(self, row: int) -> None:
-        sep = tk.Frame(
-            self,
-            height=SEPARATOR_HEIGHT,
-            bg=_separator_hex(),
-            bd=0,
-            highlightthickness=0,
-        )
+        sep = make_separator(self)
         sep.grid(
             row=row, column=0, sticky="ew",
             padx=_SEPARATOR_PADX, pady=SEPARATOR_PADY,
         )
-        sep.grid_propagate(False)
 
     def _add_nav_item(
         self,
@@ -411,8 +370,10 @@ class Sidebar(ctk.CTkFrame):
             item.set_active(profile_key(pid) == key)
 
     def _make_profile_row(self, profile: Profile) -> _NavItem:
+        # Кнопка запуска доступна, если можно копировать: сам клик
+        # выполнит копирование и затем запуск.
         on_run = None
-        if profile.can_run():
+        if profile.can_copy():
             on_run = self._safe_call_noarg(
                 lambda pid=profile.id: self._on_run_profile(pid),
                 f"run profile {profile.id}",
