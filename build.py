@@ -35,6 +35,10 @@ ENTRY_SCRIPT = "main.py"
 # config/constants.py — APP_NAME / APP_TITLE.
 OUTPUT_NAME = "CCRun"
 ICON_FILE = "assets/icon.ico"
+# Манифест с dpiAwareness=PerMonitorV2: без него Windows растягивает
+# готовое изображение окна и на 2K/4K интерфейс получается мыльным,
+# а ScalingTracker видит масштаб 1.0 и ломает расчёт геометрии.
+MANIFEST_FILE = "assets/app.manifest"
 ASSETS_DIR = "assets"
 OUTPUT_DIR = "build"
 
@@ -121,6 +125,7 @@ def _build_command(
         f"--output-dir={OUTPUT_DIR}",
         f"--output-filename={OUTPUT_NAME}",
         f"--windows-icon-from-ico={ICON_FILE}",
+        f"--windows-manifest={MANIFEST_FILE}",
         "--enable-plugin=tk-inter",
         "--jobs=4",
         "--assume-yes-for-downloads",
@@ -167,6 +172,13 @@ def _check_prerequisites(project_root: Path) -> bool:
         errors.append(
             f"Иконка не найдена: {icon}\n"
             f"Положите .ico в {ICON_FILE}."
+        )
+
+    manifest = project_root / MANIFEST_FILE
+    if not manifest.is_file():
+        errors.append(
+            f"Манифест не найден: {manifest}\n"
+            f"Без него ломается масштабирование на HiDPI."
         )
 
     constants = project_root / "config" / "constants.py"

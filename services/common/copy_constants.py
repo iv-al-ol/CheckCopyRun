@@ -19,6 +19,10 @@ from __future__ import annotations
 
 CCRUN_DIR_NAME = "!CCRun"
 
+# --- Сообщение от автора источника (внутри !CCRun) ---
+
+MESSAGE_FILE_NAME = "message.txt"
+
 # --- Старые артефакты (до CAS) ---
 
 BACKUP_PREFIX = "!Backup_"

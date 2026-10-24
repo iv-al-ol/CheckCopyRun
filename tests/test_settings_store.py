@@ -19,6 +19,87 @@ def test_defaults_new_fields():
     assert s.run_autocheck_on_restored is False
 
 
+def test_notifications_defaults():
+    """Уведомления включены, автоскрытие выключено."""
+    from config.constants import (
+        MONITOR_INTERVAL_DEFAULT,
+        NOTIFY_AUTO_CLOSE_MIN,
+    )
+
+    s = AppSettings()
+    assert s.notifications_enabled is True
+    assert s.notify_source_changes is True
+    assert s.notify_message is True
+    assert s.notify_aggregate is True
+    assert s.notify_auto_close_sec == NOTIFY_AUTO_CLOSE_MIN
+    assert s.monitor_interval_min == MONITOR_INTERVAL_DEFAULT
+
+
+def test_notifications_roundtrip():
+    s = AppSettings(
+        notifications_enabled=False,
+        notify_source_changes=False,
+        notify_message=False,
+        notify_aggregate=False,
+        notify_auto_close_sec=30,
+        monitor_interval_min=15,
+    )
+    s2 = _from_dict(_to_dict(s))
+    assert s2.notifications_enabled is False
+    assert s2.notify_source_changes is False
+    assert s2.notify_message is False
+    assert s2.notify_aggregate is False
+    assert s2.notify_auto_close_sec == 30
+    assert s2.monitor_interval_min == 15
+
+
+def test_auto_close_clamped():
+    from config.constants import (
+        NOTIFY_AUTO_CLOSE_MAX,
+        NOTIFY_AUTO_CLOSE_MIN,
+    )
+
+    below = _from_dict({"notify_auto_close_sec": -10})
+    above = _from_dict({"notify_auto_close_sec": 99999})
+    garbage = _from_dict({"notify_auto_close_sec": "abc"})
+
+    assert below.notify_auto_close_sec == NOTIFY_AUTO_CLOSE_MIN
+    assert above.notify_auto_close_sec == NOTIFY_AUTO_CLOSE_MAX
+    assert garbage.notify_auto_close_sec == NOTIFY_AUTO_CLOSE_MIN
+
+
+def test_monitor_interval_clamped():
+    from config.constants import (
+        MONITOR_INTERVAL_MAX,
+        MONITOR_INTERVAL_MIN,
+    )
+
+    assert _from_dict(
+        {"monitor_interval_min": 0},
+    ).monitor_interval_min == MONITOR_INTERVAL_MIN
+    assert _from_dict(
+        {"monitor_interval_min": 5000},
+    ).monitor_interval_min == MONITOR_INTERVAL_MAX
+
+
+def test_profile_notify_flags_roundtrip():
+    p = Profile(notify_on_changes=False, notify_on_message=False)
+    s = AppSettings(profiles=[p])
+
+    s2 = _from_dict(_to_dict(s))
+
+    assert s2.profiles[0].notify_on_changes is False
+    assert s2.profiles[0].notify_on_message is False
+
+
+def test_old_settings_without_notify_fields():
+    """Старый settings.dat без новых полей не ломает загрузку."""
+    s = _from_dict({"version": 1, "theme": "dark"})
+
+    assert s.notifications_enabled is True
+    assert s.notify_auto_close_sec == 0
+
+
 def test_roundtrip_new_flags():
     s = AppSettings(
         minimize_to_tray=True,

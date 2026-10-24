@@ -25,6 +25,7 @@ from services.common.copy_constants import (
     STATE_KIND_AUTO,
     is_special_first_segment,
 )
+from services.common.path_norm import norm_path
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,10 +35,6 @@ _LABEL_PREFIX = "Текущая версия от"
 _LABEL_SEP = " — "
 
 _MTIME_TOLERANCE_NS = 10_000_000
-
-
-def now_iso() -> str:
-    return datetime.now().isoformat(timespec="milliseconds")
 
 
 # --- Запись указателя current ---
@@ -282,7 +279,7 @@ def _scan_vs_state(
 ) -> tuple[bool, datetime | None]:
     top = to_long_path(destination)
     state_map: dict[str, StateFile] = {
-        _norm(f.path): f for f in state.files
+        norm_path(f.path): f for f in state.files
     }
     latest_ns = 0
     edited = False
@@ -297,7 +294,7 @@ def _scan_vs_state(
                 ]
             for name in names:
                 full = os.path.join(root, name)
-                rel = _norm(os.path.relpath(full, top))
+                rel = norm_path(os.path.relpath(full, top))
                 first = rel.split("/", 1)[0]
                 if is_special_first_segment(first):
                     continue
@@ -331,7 +328,9 @@ def _scan_vs_state(
                     edited = True
     except OSError as exc:
         logger.debug("_scan_vs_state: %r", exc)
-        return True, _latest_file_mtime(destination)
+        # Повторный обход упал бы так же — не тратим время впустую.
+        # Дата берётся из created_at состояния в _label_datetime.
+        return True, None
 
     if not edited and state_map:
         edited = True
@@ -401,5 +400,3 @@ def _latest_file_mtime(
         return None
 
 
-def _norm(p: str) -> str:
-    return p.replace("\\", "/")

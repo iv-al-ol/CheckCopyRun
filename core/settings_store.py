@@ -11,6 +11,12 @@ from pathlib import Path
 from config.constants import (
     HASH_CACHE_ENABLED_DEFAULT,
     ICONS_DIR_NAME,
+    MONITOR_INTERVAL_DEFAULT,
+    MONITOR_INTERVAL_MAX,
+    MONITOR_INTERVAL_MIN,
+    NOTIFY_AUTO_CLOSE_DEFAULT,
+    NOTIFY_AUTO_CLOSE_MAX,
+    NOTIFY_AUTO_CLOSE_MIN,
     SETTINGS_DIR_NAME,
     SETTINGS_FILE_NAME,
     SETTINGS_VERSION,
@@ -38,6 +44,8 @@ _PROFILE_FIELDS = {
     "run_after_copy",
     "check_on_startup",
     "mirror_mode",
+    "notify_on_changes",
+    "notify_on_message",
     "pinned",
     "last_used_at",
 }
@@ -129,6 +137,12 @@ def _to_dict(s: AppSettings) -> dict:
         "minimize_to_tray": s.minimize_to_tray,
         "autostart": s.autostart,
         "start_minimized": s.start_minimized,
+        "notifications_enabled": s.notifications_enabled,
+        "notify_source_changes": s.notify_source_changes,
+        "notify_message": s.notify_message,
+        "notify_aggregate": s.notify_aggregate,
+        "notify_auto_close_sec": s.notify_auto_close_sec,
+        "monitor_interval_min": s.monitor_interval_min,
         "backup_keep_last_enabled": s.backup_keep_last_enabled,
         "backup_keep_last_n": s.backup_keep_last_n,
         "backup_delete_older_enabled": (
@@ -174,6 +188,35 @@ def _from_dict(data: dict) -> AppSettings:
         ),
         autostart=bool(data.get("autostart", False)),
         start_minimized=bool(data.get("start_minimized", False)),
+        notifications_enabled=bool(
+            data.get("notifications_enabled", True)
+        ),
+        notify_source_changes=bool(
+            data.get("notify_source_changes", True)
+        ),
+        notify_message=bool(data.get("notify_message", True)),
+        notify_aggregate=bool(data.get("notify_aggregate", True)),
+        notify_auto_close_sec=max(
+            NOTIFY_AUTO_CLOSE_MIN,
+            min(
+                NOTIFY_AUTO_CLOSE_MAX,
+                _int(
+                    data.get("notify_auto_close_sec"),
+                    NOTIFY_AUTO_CLOSE_DEFAULT,
+                    min_v=NOTIFY_AUTO_CLOSE_MIN,
+                ),
+            ),
+        ),
+        monitor_interval_min=max(
+            MONITOR_INTERVAL_MIN,
+            min(
+                MONITOR_INTERVAL_MAX,
+                _int(
+                    data.get("monitor_interval_min"),
+                    MONITOR_INTERVAL_DEFAULT,
+                ),
+            ),
+        ),
         backup_keep_last_enabled=bool(
             data.get("backup_keep_last_enabled", False)
         ),

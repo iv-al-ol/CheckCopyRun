@@ -185,6 +185,12 @@ def _target_center_for_visible(
 def _target_center_for_hidden(
     dialog: ctk.CTkToplevel, top, scaling: float,
 ) -> tuple[int, int]:
+    """Центр монитора (или виртуального экрана) в ФИЗИЧЕСКИХ пикселях.
+
+    Единицы важны: результат подставляется в wm_geometry вместе с
+    winfo_* размерами, а они физические. Возврат логических значений
+    смещал диалог к левому верхнему углу при DPI > 100%.
+    """
     rect = window_rect(top)
 
     if rect is None:
@@ -207,18 +213,10 @@ def _target_center_for_hidden(
         )
         if monitor is not None:
             mx, my, mw, mh = monitor
-            mx_tk = int(mx / scaling)
-            my_tk = int(my / scaling)
-            mw_tk = int(mw / scaling)
-            mh_tk = int(mh / scaling)
-            return mx_tk + mw_tk // 2, my_tk + mh_tk // 2
+            return mx + mw // 2, my + mh // 2
 
     vx, vy, vw, vh = get_virtual_screen(dialog)
-    vx_tk = int(vx / scaling)
-    vy_tk = int(vy / scaling)
-    vw_tk = int(vw / scaling)
-    vh_tk = int(vh / scaling)
-    return vx_tk + vw_tk // 2, vy_tk + vh_tk // 2
+    return vx + vw // 2, vy + vh // 2
 
 
 # --- Публичные операции ---

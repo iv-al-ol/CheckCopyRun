@@ -52,6 +52,41 @@ DEFAULT_PROFILE_NAME_PREFIX = "Профиль"
 DEFAULT_PROFILE_ICON = "📁"
 
 
+# --- Уведомления и мониторинг источника ---
+
+# Папка с базовыми снимками мониторинга внутри Documents/CheckCopyRun.
+MONITOR_DIR_NAME = "monitor"
+
+# Границы интервала опроса источника (минуты).
+MONITOR_INTERVAL_MIN = 1
+MONITOR_INTERVAL_MAX = 60
+MONITOR_INTERVAL_DEFAULT = 5
+
+# Порог, после которого снимок хранится только агрегатом
+# (файлов, байт, максимальный mtime) без посуточного индекса.
+MONITOR_INDEX_MAX_FILES = 5000
+
+# Сообщение от автора папки-источника (внутри !CCRun).
+# Имя файла — services/common/copy_constants.MESSAGE_FILE_NAME.
+MESSAGE_FILE_MAX_BYTES = 64 * 1024
+MESSAGE_PREVIEW_LINES = 4
+MESSAGE_PREVIEW_CHARS = 240
+
+# Автоматическое скрытие уведомления (секунды).
+# 0 — уведомление остаётся на экране, пока его не закроют.
+NOTIFY_AUTO_CLOSE_MIN = 0
+NOTIFY_AUTO_CLOSE_MAX = 600
+NOTIFY_AUTO_CLOSE_DEFAULT = NOTIFY_AUTO_CLOSE_MIN
+
+# Плавное появление/исчезновение всплывающего уведомления.
+NOTIFY_FADE_IN_MS = 180
+NOTIFY_FADE_OUT_MS = 260
+NOTIFY_FADE_STEP_MS = 16
+
+# Порог агрегации: больше профилей за цикл — одно уведомление списком.
+NOTIFY_AGGREGATE_MAX_ITEMS = 5
+
+
 # --- Кэш хэшей ---
 HASH_CACHE_ENABLED_DEFAULT = True
 HASH_CACHE_ALGORITHM = "sha256"

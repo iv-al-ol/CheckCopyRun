@@ -16,6 +16,7 @@ from collections.abc import Callable
 import customtkinter as ctk
 
 from config.constants import SIDEBAR_ITEM_HEIGHT
+from ui.components.hover_mixin import HoverMixin
 from ui.components.nav_icon import NavIcon
 from ui.components.tooltip import Tooltip
 from ui.fonts import get_font
@@ -51,7 +52,7 @@ _EMOJI_FONT_SIZE = 14
 _RUN_TOOLTIP_DELAY_MS = 400
 
 
-class NavItem(ctk.CTkFrame):
+class NavItem(HoverMixin, ctk.CTkFrame):
     """Пункт сайдбара: иконка + текст + опциональная кнопка запуска."""
 
     def __init__(
@@ -188,31 +189,10 @@ class NavItem(ctk.CTkFrame):
             self._apply_bg()
 
     def _handle_leave(self, _event=None) -> None:
-        try:
-            self.after(20, self._check_hover)
-        except Exception as exc:
-            logger.debug("after() при Leave: %r", exc)
+        self._hover_on_leave(_event)
 
-    def _check_hover(self) -> None:
-        try:
-            under = self.winfo_containing(
-                self.winfo_pointerx(), self.winfo_pointery(),
-            )
-        except Exception as exc:
-            logger.debug("winfo_containing: %r", exc)
-            return
-        if under is None or not self._is_inside(under):
-            if self._hover:
-                self._hover = False
-                self._apply_bg()
-
-    def _is_inside(self, widget) -> bool:
-        current = widget
-        while current is not None:
-            if current is self:
-                return True
-            current = getattr(current, "master", None)
-        return False
+    def _apply_hover_bg(self, _hover: bool) -> None:
+        self._apply_bg()
 
     def _apply_bg(self) -> None:
         if self._selected:

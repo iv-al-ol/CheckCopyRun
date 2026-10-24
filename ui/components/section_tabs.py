@@ -13,6 +13,7 @@ from collections.abc import Callable
 
 import customtkinter as ctk
 
+from ui.components.wrapping_label import WrappingLabel
 from ui.fonts import get_font
 from ui.palette import (
     SURFACE_ACTIVE,
@@ -189,14 +190,14 @@ class SectionTabs(ctk.CTkFrame):
             text_color=("#a33030", "#e88080"),
         ).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 4))
 
-        ctk.CTkLabel(
+        WrappingLabel(
             frame,
             text=f"{type(exc).__name__}: {exc}",
             anchor="w",
             justify="left",
-            wraplength=800,
+            h_padding=32,
             text_color=("#a33030", "#e88080"),
-        ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 16))
+        ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
 
         return frame
 

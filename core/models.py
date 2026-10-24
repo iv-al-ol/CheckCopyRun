@@ -7,7 +7,11 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from config.constants import HASH_CACHE_ENABLED_DEFAULT
+from config.constants import (
+    HASH_CACHE_ENABLED_DEFAULT,
+    MONITOR_INTERVAL_DEFAULT,
+    NOTIFY_AUTO_CLOSE_DEFAULT,
+)
 
 
 def _new_id() -> str:
@@ -38,6 +42,11 @@ class Profile:
     check_on_startup: bool = False
 
     mirror_mode: bool = False
+
+    # Уведомления по этому профилю (перекрывают глобальные
+    # выключатели каналов, см. AppSettings).
+    notify_on_changes: bool = True
+    notify_on_message: bool = True
 
     pinned: bool = False
     last_used_at: str = ""
@@ -117,6 +126,16 @@ class AppSettings:
     minimize_to_tray: bool = False
     autostart: bool = False
     start_minimized: bool = False
+
+    # --- Уведомления и мониторинг источника ---
+    notifications_enabled: bool = True
+    notify_source_changes: bool = True
+    notify_message: bool = True
+    notify_aggregate: bool = True
+
+    # Секунды до автоскрытия; 0 — не скрывать автоматически.
+    notify_auto_close_sec: int = NOTIFY_AUTO_CLOSE_DEFAULT
+    monitor_interval_min: int = MONITOR_INTERVAL_DEFAULT
 
     backup_keep_last_enabled: bool = False
     backup_keep_last_n: int = 10

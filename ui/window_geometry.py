@@ -40,6 +40,9 @@ _SM_YVIRTUALSCREEN = 77
 _SM_CXVIRTUALSCREEN = 78
 _SM_CYVIRTUALSCREEN = 79
 
+# WinAPI SystemParametersInfo: рабочая область монитора (без панели задач).
+_SPI_GETWORKAREA = 0x0030
+
 
 # --- Разбор строки ---
 
@@ -130,24 +133,89 @@ def is_inside_virtual_screen(
     )
 
 
-# --- Операции с окном ---
+# --- Рабочая область и минимальный размер ---
 
-def apply_default_geometry(window) -> None:
-    """Стартовый размер — минимальный, по центру экрана.
+def get_work_area_logical(window) -> tuple[int, int] | None:
+    """(ширина, высота) рабочей области основного монитора.
 
-    Значения в логических пикселях: CTk умножит их на DPI-scaling
-    при установке.
+    Логические пиксели (без панели задач). None при ошибке.
+    """
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+    except OSError as exc:
+        logger.debug("user32 недоступен: %r", exc)
+        return None
+
+    class _Rect(ctypes.Structure):
+        _fields_ = [
+            ("left", ctypes.c_long),
+            ("top", ctypes.c_long),
+            ("right", ctypes.c_long),
+            ("bottom", ctypes.c_long),
+        ]
+
+    rect = _Rect()
+    try:
+        ok = user32.SystemParametersInfoW(
+            _SPI_GETWORKAREA, 0, ctypes.byref(rect), 0,
+        )
+        if not ok:
+            return None
+        width = int(rect.right - rect.left)
+        height = int(rect.bottom - rect.top)
+    except Exception as exc:
+        logger.debug("SPI_GETWORKAREA: %r", exc)
+        return None
+
+    if width <= 0 or height <= 0:
+        return None
+
+    scaling = get_dpi_scaling(window) or 1.0
+    return int(width / scaling), int(height / scaling)
+
+
+def effective_min_size(window) -> tuple[int, int]:
+    """Минимальный размер окна, вписанный в рабочую область.
+
+    На небольших экранах с высоким DPI (1366x768 при 150-200%)
+    номинальный минимум больше доступной высоты — окно стало бы
+    неуменьшаемым, а низ UI недоступным.
     """
     w = WINDOW_MIN_WIDTH
     h = WINDOW_MIN_HEIGHT
 
+    work = get_work_area_logical(window)
+    if work is None:
+        return w, h
+
+    work_w, work_h = work
+    return min(w, work_w), min(h, work_h)
+
+
+# --- Операции с окном ---
+
+def apply_default_geometry(window) -> None:
+    """Стартовый размер — минимальный, по центру рабочей области.
+
+    Значения в логических пикселях: CTk умножит их на DPI-scaling
+    при установке.
+    """
+    w, h = effective_min_size(window)
+
     scaling = get_dpi_scaling(window) or 1.0
-    try:
-        sw = int(window.winfo_screenwidth() / scaling)
-        sh = int(window.winfo_screenheight() / scaling)
-    except Exception as exc:
-        logger.debug("размер экрана недоступен: %r", exc)
-        sw, sh = w, h
+    work = get_work_area_logical(window)
+    if work is not None:
+        sw, sh = work
+    else:
+        try:
+            sw = int(window.winfo_screenwidth() / scaling)
+            sh = int(window.winfo_screenheight() / scaling)
+        except Exception as exc:
+            logger.debug("размер экрана недоступен: %r", exc)
+            sw, sh = w, h
+
+    w = min(w, sw)
+    h = min(h, sh)
 
     x = max(0, (sw - w) // 2)
     y = max(0, (sh - h) // 2)

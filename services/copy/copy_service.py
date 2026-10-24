@@ -51,6 +51,7 @@ from services.common.copy_errors import (
     CopyValidationError,
 )
 from services.common.hash_cache import HashCache, hash_file
+from services.common.worker_base import WorkerEventsMixin
 from services.copy.file_compare import (
     ComparisonResult,
     files_identical,
@@ -133,6 +134,21 @@ def format_cancel_status(result: CopyResult) -> str:
     return "Копирование отменено, изменений не было"
 
 
+def format_mirror_suffix(result: CopyResult) -> str:
+    """Суффикс статуса про удалённое в зеркальном режиме."""
+    if (
+        not result.mirror_removed_files
+        and not result.mirror_removed_dirs
+    ):
+        return ""
+    parts = []
+    if result.mirror_removed_files:
+        parts.append(f"файлов {result.mirror_removed_files}")
+    if result.mirror_removed_dirs:
+        parts.append(f"папок {result.mirror_removed_dirs}")
+    return f", убрано в бэкап: {', '.join(parts)}"
+
+
 def format_copy_status(result: CopyResult) -> str:
     if result.cancelled:
         return format_cancel_status(result)
@@ -194,7 +210,7 @@ def _validate(source: str, destination: str) -> None:
         raise CopyValidationError(conflict)
 
 
-class _CopyWorker(threading.Thread):
+class _CopyWorker(WorkerEventsMixin, threading.Thread):
     def __init__(
         self,
         source: str,
@@ -627,47 +643,9 @@ class _CopyWorker(threading.Thread):
     ) -> str | None:
         if self._state_store is None:
             return None
-
-        skip_kinds = exclude_kinds or set()
-        data_files = {f.path: f.sha256 for f in data.files}
-        data_empty = set(data.empty_dirs)
-        n_files = len(data.files)
-        n_empty = len(data.empty_dirs)
-
-        try:
-            infos = self._state_store.list()
-        except Exception as exc:
-            logger.debug(
-                "_find_matching_state: list: %r", exc,
-            )
-            return None
-
-        for info in infos:
-            if info.files_count != n_files:
-                continue
-            if info.empty_dirs_count != n_empty:
-                continue
-            if skip_kinds and info.kind in skip_kinds:
-                continue
-            try:
-                candidate = self._state_store.load(
-                    info.path.name,
-                )
-            except Exception as exc:
-                logger.debug(
-                    "_find_matching_state: load %s: %r",
-                    info.path.name, exc,
-                )
-                continue
-            cand_files = {
-                f.path: f.sha256 for f in candidate.files
-            }
-            if cand_files != data_files:
-                continue
-            if set(candidate.empty_dirs) != data_empty:
-                continue
-            return info.path.name
-        return None
+        return self._state_store.find_matching(
+            data, exclude_kinds=exclude_kinds,
+        )
 
     def _load_current_state(self) -> StateData | None:
         assert self._current is not None
@@ -989,29 +967,6 @@ class _CopyWorker(threading.Thread):
             lambda p=progress: self._on_progress(p),
             "on_progress",
         )
-
-    def _emit_done(self) -> None:
-        self._safe_schedule(
-            lambda r=self._result: self._on_done(r),
-            "on_done",
-        )
-
-    def _emit_error(self, message: str) -> None:
-        self._safe_schedule(
-            lambda m=message: self._on_error(m),
-            "on_error",
-        )
-
-    def _safe_schedule(
-        self, callback: Callable[[], None], name: str,
-    ) -> None:
-        try:
-            self._schedule(callback)
-        except Exception as exc:
-            logger.error(
-                "scheduler упал на %s: %r", name, exc,
-            )
-
 
 def _empty_state() -> StateData:
     return StateData(

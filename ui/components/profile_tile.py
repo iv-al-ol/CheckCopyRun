@@ -19,6 +19,7 @@ import customtkinter as ctk
 from config.constants import DEFAULT_PROFILE_ICON
 from core.models import Profile
 from core.paths import looks_like_image_path
+from ui.components.hover_mixin import HoverMixin
 from ui.components.image_utils import load_ctk_image
 from ui.components.tooltip import Tooltip
 from ui.fonts import get_emoji_font, get_font
@@ -72,7 +73,7 @@ _PIN_ON_TEXT_COLOR = ("#b8860b", "#ffd700")   # darkgoldenrod / gold
 _PIN_OFF_TEXT_COLOR = ACCENT_TEXT              # белый на синем фоне
 
 
-class ProfileTile(ctk.CTkFrame):
+class ProfileTile(HoverMixin, ctk.CTkFrame):
     """Плитка профиля с двумя действиями."""
 
     def __init__(
@@ -265,36 +266,13 @@ class ProfileTile(ctk.CTkFrame):
             w.bind("<Button-1>", self._on_body_click, add="+")
 
     def _on_enter(self, _event=None) -> None:
-        if not self._hover:
-            self._hover = True
-            self._apply_bg(True)
+        self._hover_on_enter(_event)
 
     def _on_leave(self, _event=None) -> None:
-        try:
-            self.after(20, self._check_hover)
-        except Exception as exc:
-            logger.debug("after() при Leave плитки: %r", exc)
+        self._hover_on_leave(_event)
 
-    def _check_hover(self) -> None:
-        try:
-            under = self.winfo_containing(
-                self.winfo_pointerx(), self.winfo_pointery(),
-            )
-        except Exception as exc:
-            logger.debug("winfo_containing плитки: %r", exc)
-            return
-        if under is None or not self._is_inside(under):
-            if self._hover:
-                self._hover = False
-                self._apply_bg(False)
-
-    def _is_inside(self, widget) -> bool:
-        current = widget
-        while current is not None:
-            if current is self:
-                return True
-            current = getattr(current, "master", None)
-        return False
+    def _apply_hover_bg(self, hover: bool) -> None:
+        self._apply_bg(hover)
 
     def _apply_bg(self, hover: bool) -> None:
         try:

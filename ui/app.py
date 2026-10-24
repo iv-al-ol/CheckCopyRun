@@ -11,8 +11,6 @@ from config.constants import (
     APP_NAME,
     APP_TITLE,
     THEME_DEFAULT,
-    WINDOW_MIN_HEIGHT,
-    WINDOW_MIN_WIDTH,
 )
 from core.models import AppSettings, Profile
 from core.paths import ensure_directory, get_asset_path
@@ -29,8 +27,10 @@ from services.copy.copy_service import (
     CopyService,
     format_cancel_status,
     format_copy_status,
+    format_mirror_suffix,
 )
 from services.copy.mirror_check import scan_mirror_diff
+from services.monitor.monitor_service import MonitorService
 from services.restore.disk_space import check_disk_space
 from services.restore.restore_service import (
     RestoreProgress,
@@ -40,9 +40,14 @@ from services.restore.restore_service import (
 )
 from services.startup_check import StartupCheckQueue
 from services.system.icon_cleanup import cleanup_unused_icons
+from services.system.notifier import (
+    ChainNotifier,
+    build_fallback_notifier,
+)
 from services.system.tray_manager import TrayManager
 from ui.components.context_menu import ContextMenu
 from ui.components.status_bar import StatusBar
+from ui.components.toast import ToastManager, ToastNotifier
 from ui.dialogs import ask_yes_no, show_error
 from ui.dialogs._icon import apply_app_icon
 from ui.dialogs.disk_space import confirm_insufficient_space
@@ -65,6 +70,7 @@ from ui.window_geometry import (
     WindowGeometryTracker,
     apply_default_geometry,
     capture_geometry,
+    effective_min_size,
     is_valid_geometry_string,
     try_restore_geometry,
 )
@@ -73,6 +79,10 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 _STARTUP_CHECK_DELAY_MS = 700
+
+# Мониторинг стартует после автопроверки, чтобы первый цикл
+# не соревновался с копированием за диск.
+_MONITOR_START_DELAY_MS = 2500
 
 # Термин для restore_point в UI.
 _RETURN_POINT_LABEL = "Точка возврата"
@@ -92,7 +102,8 @@ class MainWindow(ctk.CTk):
         apply_theme(self.settings.theme or THEME_DEFAULT)
 
         self.title(APP_TITLE)
-        self.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+        min_w, min_h = effective_min_size(self)
+        self.minsize(min_w, min_h)
 
         self.active_profile_id: str | None = None
         self._icon_photo = None
@@ -146,6 +157,19 @@ class MainWindow(ctk.CTk):
             on_finish=self.refresh_main_view,
         )
 
+        self.toast_manager = ToastManager(self)
+        self.monitor = MonitorService(
+            notifier=ChainNotifier([
+                ToastNotifier(self.toast_manager, self),
+                build_fallback_notifier(self._tray),
+            ]),
+            is_busy=self._is_profile_busy,
+            scheduler=lambda fn: self.after(0, fn),
+        )
+        self.monitor.configure(
+            self.settings.profiles, self.settings,
+        )
+
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self._geometry_tracker.start()
 
@@ -153,6 +177,7 @@ class MainWindow(ctk.CTk):
             self._hide_to_tray()
 
         self.after(_STARTUP_CHECK_DELAY_MS, self._run_startup_check)
+        self.after(_MONITOR_START_DELAY_MS, self.refresh_monitor_config)
 
     # --- Системный трей ---
 
@@ -508,9 +533,78 @@ class MainWindow(ctk.CTk):
             save_settings(self.settings)
         except Exception as exc:
             logger.error("Не удалось сохранить настройки: %r", exc)
+        self.refresh_monitor_config()
 
     def refresh_sidebar(self) -> None:
         self.layout.sidebar.rebuild_profiles(self.settings.profiles)
+        self.refresh_monitor_config()
+
+    # --- Мониторинг источника и уведомления ---
+
+    def refresh_monitor_config(self) -> None:
+        """Пересинхронизирует монитор с текущими настройками.
+
+        Вызывается после любого изменения настроек или списка
+        профилей. Монитор либо стартует, либо останавливается —
+        сам он по настройкам не «догадывается».
+        """
+        monitor = getattr(self, "monitor", None)
+        if monitor is None:
+            return
+
+        try:
+            monitor.configure(
+                self.settings.profiles, self.settings,
+            )
+            if self.settings.notifications_enabled:
+                self._ensure_tray_for_monitor()
+                monitor.start()
+            else:
+                monitor.stop()
+        except Exception as exc:
+            logger.error(
+                "Не удалось переконфигурировать монитор: %r",
+                exc, exc_info=True,
+            )
+
+    def _ensure_tray_for_monitor(self) -> None:
+        """Трей нужен как фолбэк, если UI-тост недоступен.
+
+        При штатной работе уведомления показывает собственное
+        окно (`ui/components/toast.py`). Иконка в трее поднимается
+        только для режима «сворачивать в трей» — иначе не нужна.
+        """
+        if self._tray.is_active:
+            return
+        if not self.settings.minimize_to_tray:
+            return
+        if not self._tray.start():
+            logger.debug("Трей недоступен")
+
+    def _is_profile_busy(self, _profile_id: str) -> bool:
+        """Идёт ли сейчас копирование/восстановление.
+
+        Пока идёт длительная операция, опрос источника
+        пропускается целиком: не мешаем диску и не показываем
+        уведомление о том, что пользователь только что копирует.
+        Следующий цикл подхватит изменения.
+        """
+        return (
+            self.copy_service.is_running
+            or self.restore_service.is_running
+        )
+
+    def reset_monitor_profile(self, profile_id: str) -> None:
+        """Сбрасывает базу мониторинга профиля после копирования."""
+        monitor = getattr(self, "monitor", None)
+        if monitor is None:
+            return
+        try:
+            monitor.reset_profile(profile_id)
+        except Exception as exc:
+            logger.debug(
+                "reset_monitor_profile(%r): %r", profile_id, exc,
+            )
 
     def refresh_main_view(self) -> None:
         view = self.router.get_view("main")
@@ -649,7 +743,7 @@ class MainWindow(ctk.CTk):
             return
 
         copy_text = format_copy_status(result)
-        copy_text += self._mirror_suffix(result)
+        copy_text += format_mirror_suffix(result)
 
         if result.errors > 0:
             self.set_status_progress(copy_text, None)
@@ -667,6 +761,7 @@ class MainWindow(ctk.CTk):
 
         profile.touch()
         save_settings(self.settings)
+        self.reset_monitor_profile(profile.id)
 
         if not profile.exe_relative:
             self.set_status_progress(
@@ -703,20 +798,6 @@ class MainWindow(ctk.CTk):
             f"{copy_text}  ·  Запущено: {Path(full).name}",
             None,
         )
-
-    @staticmethod
-    def _mirror_suffix(result: CopyResult) -> str:
-        if (
-            not result.mirror_removed_files
-            and not result.mirror_removed_dirs
-        ):
-            return ""
-        parts = []
-        if result.mirror_removed_files:
-            parts.append(f"файлов {result.mirror_removed_files}")
-        if result.mirror_removed_dirs:
-            parts.append(f"папок {result.mirror_removed_dirs}")
-        return f", убрано в бэкап: {', '.join(parts)}"
 
     def _on_run_check_error(self, message: str) -> None:
         self.set_status_progress(f"Ошибка: {message}", None)
@@ -832,6 +913,9 @@ class MainWindow(ctk.CTk):
                 return
 
         self._closing = True
+        monitor = getattr(self, "monitor", None)
+        if monitor is not None:
+            monitor.stop()
         self._tray.stop()
         self.startup_checker.cancel()
         try:

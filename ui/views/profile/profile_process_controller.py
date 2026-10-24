@@ -13,6 +13,7 @@ from services.copy.copy_service import (
     PHASE_SAVE_STORE,
     CopyResult,
     format_copy_status,
+    format_mirror_suffix,
 )
 from services.system.launcher import LaunchError, launch_exe
 from ui.dialogs import show_error
@@ -131,7 +132,7 @@ class ProfileProcessController:
         self._on_busy_change(False)
 
         text = format_copy_status(result)
-        text += self._mirror_suffix(result)
+        text += format_mirror_suffix(result)
         self._window.set_status_progress(text, None)
 
         if result.cancelled:
@@ -143,20 +144,6 @@ class ProfileProcessController:
 
         if profile.run_after_copy and result.errors == 0:
             self.run()
-
-    @staticmethod
-    def _mirror_suffix(result: CopyResult) -> str:
-        if (
-            not result.mirror_removed_files
-            and not result.mirror_removed_dirs
-        ):
-            return ""
-        parts = []
-        if result.mirror_removed_files:
-            parts.append(f"файлов {result.mirror_removed_files}")
-        if result.mirror_removed_dirs:
-            parts.append(f"папок {result.mirror_removed_dirs}")
-        return f", убрано в бэкап: {', '.join(parts)}"
 
     def _on_copy_error(self, message: str) -> None:
         self._on_busy_change(False)

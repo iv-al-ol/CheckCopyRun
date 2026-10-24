@@ -10,6 +10,9 @@ from ui.views.base_view import BaseView
 from ui.views.settings.tabs.about_tab import AboutTab
 from ui.views.settings.tabs.backups_tab import BackupsTab
 from ui.views.settings.tabs.general_tab import GeneralTab
+from ui.views.settings.tabs.notifications_tab import (
+    NotificationsTab,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -71,6 +74,10 @@ class SettingsView(BaseView):
         self.tabs.add_tab(
             "general", "Общие",
             lambda: GeneralTab(container, window=window),
+        )
+        self.tabs.add_tab(
+            "notifications", "Уведомления",
+            lambda: NotificationsTab(container, window=window),
         )
         self.tabs.add_tab(
             "backups", "Бэкапы",

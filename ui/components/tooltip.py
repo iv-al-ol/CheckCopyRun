@@ -41,6 +41,15 @@ from collections.abc import Callable
 
 import customtkinter as ctk
 
+from ui.components.popup_utils import (
+    get_scaling as _get_scaling,
+)
+from ui.components.popup_utils import (
+    is_inside as _widget_is_inside,
+)
+from ui.components.popup_utils import (
+    make_transparent as _make_transparent,
+)
 from ui.fonts import get_font
 from ui.palette import (
     SURFACE_BG,
@@ -72,8 +81,6 @@ _LEAVE_CHECK_DELAY_MS = 80
 # не дошёл или был отменён таймаут.
 _POLL_INTERVAL_MS = 200
 
-# Служебный цвет для прозрачных углов.
-_TRANSPARENT_COLOR = "#ff00fe"
 
 TooltipText = str | Callable[[], str]
 
@@ -101,29 +108,6 @@ def _unregister_active(tooltip: Tooltip) -> None:
     global _active_tooltip
     if _active_tooltip is tooltip:
         _active_tooltip = None
-
-
-def _get_scaling(widget) -> float:
-    try:
-        value = ctk.ScalingTracker.get_widget_scaling(widget)
-        if value and value > 0:
-            return float(value)
-    except Exception as exc:
-        logger.debug("ScalingTracker.get_widget_scaling: %r", exc)
-    return 1.0
-
-
-def _make_transparent(window: tk.Toplevel) -> None:
-    try:
-        window.configure(bg=_TRANSPARENT_COLOR)
-    except Exception as exc:
-        logger.debug("configure(bg) у Toplevel: %r", exc)
-        return
-
-    try:
-        window.attributes("-transparentcolor", _TRANSPARENT_COLOR)
-    except Exception as exc:
-        logger.debug("-transparentcolor: %r", exc)
 
 
 class Tooltip:
@@ -268,12 +252,7 @@ class Tooltip:
         return self._is_inside(under)
 
     def _is_inside(self, widget) -> bool:
-        current = widget
-        while current is not None:
-            if current is self._widget:
-                return True
-            current = getattr(current, "master", None)
-        return False
+        return _widget_is_inside(widget, self._widget)
 
     # --- Показ ---
 

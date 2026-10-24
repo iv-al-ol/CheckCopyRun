@@ -80,12 +80,33 @@ main.py → ui.app.MainWindow
             ├── core/             модели, пути, settings_store, long_io
             ├── services/         вся бизнес-логика (не знает про Tk)
             ├── ui/               CTk-слой: layouts, components, views, dialogs
-            └── utils/            логирование
+            └── utils/            сквозная инфраструктура (логирование)
 ```
 
 **Инвариант**: `services/` не импортирует `tkinter` / `customtkinter`.
 UI получает события через колбэки + `scheduler` (обычно
 `self.after(0, fn)`).
+
+#### Почему `utils/` — отдельный пакет, а не часть `core/` или `services/`
+
+| | `services/` | `utils/` |
+|---|---|---|
+| Назначение | бизнес-логика: CAS, копирование, restore, системные интеграции | инфраструктура без домена |
+| Знает о домене | да (`Profile`, состояния, blob-ы) | нет |
+| Кто импортирует | `ui/` (через `MainWindow`) | все слои: `main`, `config`, `core`, `services`, `ui` |
+| Ограничения слоёв | нельзя `ui.*`, `tkinter` | нет — самый нижний слой |
+
+Сейчас в `utils/` один модуль — `logger.py`, но его импортируют
+почти все модули проекта. Пакет отделён намеренно:
+
+- **Не внутри `core/`**: `core/paths.py` и `core/settings_store.py`
+  сами импортируют `utils.logger`. Перенос логгера в `core/` или
+  `services/` создал бы цикл `core ↔ services` и нарушил инвариант
+  из `.zoorules` §4.
+- **Не один модуль в корне**: пакет честно обозначает роль
+  «доменно-нейтральная инфраструктура» и оставляет место для
+  будущих помощников (форматирование, замеры времени), которым
+  нельзя жить в `services/`.
 
 ### Ключевые модули
 
@@ -143,6 +164,37 @@ UI получает события через колбэки + `scheduler` (об
   Единый механизм для restore и rollback.
 - `services/restore/disk_space.py` — быстрая оценка по stat.
 
+**Мониторинг источника (`services/monitor/`):**
+- `services/monitor/source_snapshot.py` — `build_snapshot(source,
+  max_files)` (только `stat` через `long_io`, без чтения содержимого
+  и хэширования) и `diff_snapshots(old, new) -> SnapshotDiff`
+  (`added`, `modified`, `removed`). При числе файлов больше
+  `MONITOR_INDEX_MAX_FILES` посуточный индекс не хранится:
+  `truncated=True`, изменения оцениваются по агрегатам
+  `(total_files, total_bytes, max_mtime_ns)`.
+- `services/monitor/message_file.py` — `read_message(source)` →
+  `SourceMessage` (`text`, `preview`, `sha256`, `truncated`).
+  Читает `<source>/!CCRun/message.txt` с лимитом
+  `MESSAGE_FILE_MAX_BYTES`, перебирает кодировки
+  (`utf-8-sig`, `utf-8`, `cp1251`), обрезает превью по
+  `MESSAGE_PREVIEW_LINES` / `MESSAGE_PREVIEW_CHARS`. sha256 —
+  для дедупликации: одно сообщение не показывается дважды.
+- `services/monitor/monitor_state.py` — `MonitorStore` /
+  `MonitorEntry`. База снимков и хэша сообщения в
+  `Documents/CheckCopyRun/monitor/<profile_id>.json`,
+  атомарная запись (`.tmp` + `Path.replace`), `prune(keep_ids)`.
+  `profile_id` валидируется regex — защита от подстановки в имя
+  файла.
+- `services/monitor/monitor_service.py` — `MonitorService`.
+  Один daemon-поток `SourceMonitor`, профили обходятся
+  последовательно. `run_once()` синхронен и тестируем без
+  потоков и `sleep`. Первый цикл профиля только создаёт базу
+  (иначе уведомление «изменилось всё»), сообщение из
+  `message.txt` показывается сразу. Пропускает профиль, если
+  идёт copy/restore или источник недоступен (исчезнувший
+  источник не трактуется как «удалено всё»). После смены
+  `source` база пересоздаётся без сравнения.
+
 **Вспомогательное:**
 - `services/startup_check.py` — `StartupCheckQueue`,
   `select_startup_candidates(profiles, run_on_restored)`,
@@ -165,11 +217,35 @@ UI получает события через колбэки + `scheduler` (об
 - `services/system/launcher.py` — `launch_exe` через `subprocess.Popen`.
 - `services/system/tray.py`, `services/system/tray_manager.py` — иконка
   в системном трее.
+- `services/system/notifier.py` — протокол `Notifier` и
+  сервисные провайдеры: `TrayNotifier` (balloon иконки трея) и
+  `NullNotifier` (тихий no-op), сборка `build_fallback_notifier`.
+  Здесь же чистые функции форматирования:
+  `format_changes_summary`, `format_profile_notification`,
+  `plural_files`, `plural_profiles`. Показ идёт из потока
+  монитора, поэтому провайдеры обязаны быть потокобезопасными.
+  Основной способ показа — UI-тост, см. ниже.
+- `ui/components/toast.py` — собственное всплывающее
+  уведомление: `ToastWindow` (окно без рамки, `-topmost`, не
+  забирает фокус, плавные появление/исчезновение через
+  `attributes("-alpha", …)`, автозакрытие по
+  `Notification.auto_close_sec`, `0` — до клика), `ToastManager`
+  (стопка окон снизу вверх, DPI-осведомлённое
+  позиционирование) и `ToastNotifier` (адаптер под `Notifier`,
+  маршалит показ в Tk-поток через `after(0, …)`). Нативные
+  Windows-toast не используются: WinRT не даёт произвольной
+  длительности и управляемой анимации.
 
 **UI:**
 - `ui/app.py` — `MainWindow`. Оркестратор: роутер, статус-бар,
   `CopyService`/`RestoreService`, `StartupCheckQueue`,
-  `ProfileActionController`, контекстные меню.
+  `MonitorService`, `ProfileActionController`, контекстные меню.
+  `refresh_monitor_config()` — единственная точка синхронизации
+  настроек со монитором: вызывается из `save_settings_now()` и
+  `refresh_sidebar()`, стартует/останавливает поток по
+  `notifications_enabled` и поднимает трей как фолбэк уведомлений.
+  `reset_monitor_profile(pid)` вызывается после успешного
+  копирования, чтобы скопированное не считалось «новостью».
 - `ui/layouts/sidebar.py` — `Sidebar`. Список профилей + выделение
   (Ctrl/Shift/рамка). Клик вне списка сбрасывает выделение.
 - `ui/views/profile/profile_view.py` — `ProfileView`. Метка версии
@@ -193,6 +269,7 @@ UI получает события через колбэки + `scheduler` (об
     settings.dat     # настройки, DPAPI
     log\app.log      # лог с ротацией
     icons\exe_*.png  # PNG-иконки, извлечённые из exe профилей
+    monitor\<profile_id>.json  # база снимков источника для уведомлений
 ```
 
 ### Destination каждого профиля

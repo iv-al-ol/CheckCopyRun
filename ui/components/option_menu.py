@@ -9,6 +9,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from ui.components.popup_utils import get_scaling as _get_scaling
 from ui.fonts import get_font
 from ui.palette import (
     ACCENT,
@@ -80,6 +81,7 @@ class StyledOptionMenu(ctk.CTkFrame):
         self._variable = variable or ctk.StringVar(value=initial)
         self._command = command
         self._popup: _DropdownPopup | None = None
+        self._enabled = True
 
         self._label = ctk.CTkLabel(
             self,
@@ -110,6 +112,16 @@ class StyledOptionMenu(ctk.CTkFrame):
 
     def get(self) -> str:
         return self._variable.get()
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Блокирует/разблокирует выбор без смены внешнего вида."""
+        self._enabled = bool(enabled)
+        try:
+            self._arrow_button.configure(
+                state="normal" if enabled else "disabled",
+            )
+        except Exception as exc:
+            logger.debug("option_menu set_enabled: %r", exc)
 
     def configure_values(self, values: list[str]) -> None:
         self._values = list(values)
@@ -187,6 +199,8 @@ class StyledOptionMenu(ctk.CTkFrame):
         self._label.configure(text=self._variable.get())
 
     def _toggle_popup(self) -> None:
+        if not getattr(self, "_enabled", True):
+            return
         if self._popup is not None:
             self._popup.close()
         else:
@@ -276,9 +290,18 @@ class _DropdownPopup:
             btn.pack(fill="x", pady=1)
 
         top.update_idletasks()
-        width = max(self._anchor.winfo_width(), 100)
-        height = (
-            len(self._values) * (_ITEM_HEIGHT + 2) + 2 * _POPUP_PAD
+
+        # Всё в физических пикселях: winfo_* физические, а CTk-обёртка
+        # geometry() умножила бы их ещё раз. Иначе на DPI > 100%
+        # ширина (физическая) и высота (логическая) оказывались в
+        # разных единицах и последний пункт обрезался.
+        scaling = _get_scaling(top)
+        width = max(self._anchor.winfo_width(), round(100 * scaling))
+        height = round(
+            (
+                len(self._values) * (_ITEM_HEIGHT + 2)
+                + 2 * _POPUP_PAD
+            ) * scaling,
         )
 
         try:
@@ -286,7 +309,7 @@ class _DropdownPopup:
             y = (
                 self._anchor.winfo_rooty()
                 + self._anchor.winfo_height()
-                + _POPUP_GAP
+                + round(_POPUP_GAP * scaling)
             )
         except Exception as exc:
             logger.error(
@@ -295,7 +318,7 @@ class _DropdownPopup:
             self.close()
             return
 
-        top.geometry(f"{width}x{height}+{x}+{y}")
+        top.wm_geometry(f"{width}x{height}+{x}+{y}")
         try:
             top.lift()
         except Exception as exc:

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from services.cas.blob_store import BlobStore
 from services.cas.state_store import StateData, StateFile
+from services.common.path_norm import norm_path
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -57,12 +58,12 @@ def build_plan(
     plan = RestorePlan()
 
     current_map: dict[str, StateFile] = {
-        _norm(f.path): f for f in current.files
+        norm_path(f.path): f for f in current.files
     }
     target_paths: set[str] = set()
 
     for f in target.files:
-        key = _norm(f.path)
+        key = norm_path(f.path)
         target_paths.add(key)
         cur = current_map.get(key)
         if cur is not None and cur.sha256 == f.sha256:
@@ -100,9 +101,6 @@ def build_plan(
 
 # --- Вспомогательное ---
 
-def _norm(p: str) -> str:
-    """Приводит path к прямым слэшам для сравнения."""
-    return p.replace("\\", "/")
 
 
 def _compute_needed_dirs(target: StateData) -> set[str]:
@@ -118,13 +116,13 @@ def _compute_needed_dirs(target: StateData) -> set[str]:
     dirs: set[str] = set()
 
     for d in target.empty_dirs:
-        p = _norm(d)
+        p = norm_path(d)
         parts = p.split("/")
         for i in range(1, len(parts) + 1):
             dirs.add("/".join(parts[:i]))
 
     for f in target.files:
-        p = _norm(f.path)
+        p = norm_path(f.path)
         parts = p.split("/")
         # Предки (без самого файла).
         for i in range(1, len(parts)):

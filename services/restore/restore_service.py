@@ -24,12 +24,15 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from core import long_io
+from core.paths import to_long_path
 from services.cas.blob_store import BlobStore
 from services.cas.current_pointer import CurrentPointer
 from services.cas.destination_state import commit_current
@@ -41,6 +44,7 @@ from services.cas.state_store import (
 )
 from services.common.copy_constants import STATE_KIND_RESTORE_POINT
 from services.common.hash_cache import HashCache
+from services.common.worker_base import WorkerEventsMixin
 from services.restore.restore_apply import apply_plan
 from services.restore.restore_planner import build_plan
 from utils.logger import get_logger
@@ -124,7 +128,7 @@ def format_restore_status(result: RestoreResult) -> str:
 
 # --- Воркер ---
 
-class _RestoreWorker(threading.Thread):
+class _RestoreWorker(WorkerEventsMixin, threading.Thread):
     def __init__(
         self,
         backup_state_ref: str,
@@ -361,44 +365,7 @@ class _RestoreWorker(threading.Thread):
         """Ищет существующий state с идентичным содержимым."""
         if self._state_store is None:
             return None
-
-        data_files = {f.path: f.sha256 for f in data.files}
-        data_empty = set(data.empty_dirs)
-        n_files = len(data.files)
-        n_empty = len(data.empty_dirs)
-
-        try:
-            infos = self._state_store.list()
-        except Exception as exc:
-            logger.debug(
-                "_find_matching_state: list: %r", exc,
-            )
-            return None
-
-        for info in infos:
-            if info.files_count != n_files:
-                continue
-            if info.empty_dirs_count != n_empty:
-                continue
-            try:
-                candidate = self._state_store.load(
-                    info.path.name,
-                )
-            except Exception as exc:
-                logger.debug(
-                    "_find_matching_state: load %s: %r",
-                    info.path.name, exc,
-                )
-                continue
-            cand_files = {
-                f.path: f.sha256 for f in candidate.files
-            }
-            if cand_files != data_files:
-                continue
-            if set(candidate.empty_dirs) != data_empty:
-                continue
-            return info.path.name
-        return None
+        return self._state_store.find_matching(data)
 
     # --- Откат ---
 
@@ -453,13 +420,13 @@ class _RestoreWorker(threading.Thread):
     def _populate_blobs(self, data: StateData) -> None:
         if self._blobs is None:
             return
-        base = Path(self._destination)
+        base = to_long_path(self._destination)
         for f in data.files:
-            full = base / f.path
-            if not full.is_file():
+            full = os.path.join(base, f.path)
+            if not long_io.isfile(full):
                 continue
             try:
-                self._blobs.put(str(full), f.sha256)
+                self._blobs.put(full, f.sha256)
             except Exception as exc:
                 logger.warning("populate_blobs: %r", exc)
 
@@ -499,27 +466,6 @@ class _RestoreWorker(threading.Thread):
             "on_progress",
         )
 
-    def _emit_done(self) -> None:
-        self._safe_schedule(
-            lambda r=self._result: self._on_done(r),
-            "on_done",
-        )
-
-    def _emit_error(self, message: str) -> None:
-        self._safe_schedule(
-            lambda m=message: self._on_error(m),
-            "on_error",
-        )
-
-    def _safe_schedule(
-        self, callback: Callable[[], None], name: str,
-    ) -> None:
-        try:
-            self._schedule(callback)
-        except Exception as exc:
-            logger.error(
-                "scheduler упал на %s: %r", name, exc,
-            )
 
 
 # --- Сервис ---

@@ -110,6 +110,8 @@ class ProfileForm(ctk.CTkFrame):
         on_run_after_toggle: Callable[[], None],
         on_check_on_startup_toggle: Callable[[], None],
         on_mirror_toggle: Callable[[], None],
+        on_notify_changes_toggle: Callable[[], None],
+        on_notify_message_toggle: Callable[[], None],
     ):
         super().__init__(master, fg_color="transparent")
         self.grid_columnconfigure(0, weight=1)
@@ -188,7 +190,36 @@ class ProfileForm(ctk.CTkFrame):
             text_color=("gray40", "gray60"),
             font=get_font(_HINT_FONT_SIZE),
             h_padding=_HINT_HPADDING,
-        ).grid(row=7, column=0, sticky="ew", pady=(0, 16))
+        ).grid(row=7, column=0, sticky="ew", pady=(0, 12))
+
+        self._notify_changes_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            self,
+            text="Уведомлять об изменениях файлов этого источника",
+            variable=self._notify_changes_var,
+            command=on_notify_changes_toggle,
+        ).grid(row=8, column=0, sticky="w", pady=(0, 4))
+
+        self._notify_message_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            self,
+            text="Уведомлять о сообщении из !CCRun/message.txt",
+            variable=self._notify_message_var,
+            command=on_notify_message_toggle,
+        ).grid(row=9, column=0, sticky="w", pady=(4, 4))
+
+        WrappingLabel(
+            self,
+            text=(
+                "Работает только при включённых уведомлениях в "
+                "Настройки → Уведомления. Файл !CCRun/message.txt "
+                "кладёт автор папки-источника; он не копируется "
+                "в целевую папку."
+            ),
+            text_color=("gray40", "gray60"),
+            font=get_font(_HINT_FONT_SIZE),
+            h_padding=_HINT_HPADDING,
+        ).grid(row=10, column=0, sticky="ew", pady=(0, 16))
 
     # --- Свойства чекбоксов ---
 
@@ -208,6 +239,14 @@ class ProfileForm(ctk.CTkFrame):
     def mirror_mode(self) -> bool:
         return bool(self._mirror_var.get())
 
+    @property
+    def notify_on_changes(self) -> bool:
+        return bool(self._notify_changes_var.get())
+
+    @property
+    def notify_on_message(self) -> bool:
+        return bool(self._notify_message_var.get())
+
     # --- Обновление ---
 
     def set_create_backup(self, value: bool) -> None:
@@ -224,6 +263,8 @@ class ProfileForm(ctk.CTkFrame):
         run_after_copy: bool,
         check_on_startup: bool,
         mirror_mode: bool,
+        notify_on_changes: bool = True,
+        notify_on_message: bool = True,
     ) -> None:
         self._source_row.set_value(source)
         self._dest_row.set_value(destination)
@@ -231,6 +272,8 @@ class ProfileForm(ctk.CTkFrame):
         self._backup_var.set(create_backup)
         self._check_on_startup_var.set(check_on_startup)
         self._mirror_var.set(mirror_mode)
+        self._notify_changes_var.set(notify_on_changes)
+        self._notify_message_var.set(notify_on_message)
 
         has_exe = bool(exe_name)
         if has_exe:

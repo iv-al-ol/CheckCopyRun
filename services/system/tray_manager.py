@@ -46,6 +46,17 @@ class TrayManager:
             return True
         return False
 
+    def notify(self, message: str, title: str | None = None) -> bool:
+        """Balloon-уведомление из иконки трея.
+
+        Returns:
+            `True`, если иконка активна и уведомление отправлено.
+        """
+        if self._tray is None:
+            return False
+        self._tray.notify(message, title)
+        return True
+
     def stop(self) -> None:
         if self._tray is None:
             return

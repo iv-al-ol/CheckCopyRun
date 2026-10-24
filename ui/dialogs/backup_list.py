@@ -39,6 +39,7 @@ from ui.components.button import (
 from ui.components.scrollable import AutoHideScrollableFrame
 from ui.components.separator import make_separator
 from ui.dialogs import ask_yes_no, show_error
+from ui.dialogs._centering import get_scaling as _get_scaling
 from ui.dialogs._icon import apply_dialog_icon
 from ui.fonts import get_font
 from utils.logger import get_logger
@@ -307,6 +308,15 @@ class _BackupListDialog:
                 )
 
     def _position_and_size(self) -> None:
+        """Центрирует диалог по родителю в ФИЗИЧЕСКИХ пикселях.
+
+        winfo_* возвращают физические пиксели, поэтому размер диалога
+        тоже масштабируется, а применяется через wm_geometry: CTk-
+        обёртка geometry() умножила бы и позицию — окно уехало бы
+        при DPI > 100%.
+        """
+        scaling = _get_scaling(self._dialog)
+
         try:
             px = self._parent.winfo_rootx()
             py = self._parent.winfo_rooty()
@@ -317,15 +327,16 @@ class _BackupListDialog:
             px = py = 100
             pw = ph = 1200
 
-        x = px + max(0, (pw - _DIALOG_WIDTH) // 2)
-        y = py + max(0, (ph - _DIALOG_HEIGHT) // 2)
+        dw = int(round(_DIALOG_WIDTH * scaling))
+        dh = int(round(_DIALOG_HEIGHT * scaling))
+
+        x = px + max(0, (pw - dw) // 2)
+        y = py + max(0, (ph - dh) // 2)
 
         try:
-            self._dialog.geometry(
-                f"{_DIALOG_WIDTH}x{_DIALOG_HEIGHT}+{x}+{y}"
-            )
+            self._dialog.wm_geometry(f"{dw}x{dh}+{x}+{y}")
         except Exception as exc:
-            logger.error("geometry диалога: %r", exc)
+            logger.error("wm_geometry диалога: %r", exc)
 
     def _build(self) -> None:
         header = ctk.CTkFrame(

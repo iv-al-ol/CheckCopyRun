@@ -22,6 +22,7 @@ from services.common.copy_constants import (
     TMP_SUFFIX,
     is_special_first_segment,
 )
+from services.common.path_norm import norm_path
 from services.restore.restore_planner import RestorePlan
 from utils.logger import get_logger
 
@@ -144,8 +145,6 @@ def apply_plan(
     return result
 
 
-def _norm(p: str) -> str:
-    return p.replace("\\", "/")
 
 
 def _emit(
@@ -185,7 +184,7 @@ def _cleanup_empty_dirs(
     destination: str, needed: set[str],
 ) -> int:
     base = to_long_path(destination)
-    needed_norm = {_norm(p) for p in needed}
+    needed_norm = {norm_path(p) for p in needed}
     all_dirs: list[str] = []
 
     try:
@@ -212,7 +211,7 @@ def _cleanup_empty_dirs(
             rel = os.path.relpath(d, base)
         except ValueError:
             continue
-        if _norm(rel) in needed_norm:
+        if norm_path(rel) in needed_norm:
             continue
         try:
             if long_io.isdir(d) and not long_io.listdir(d):

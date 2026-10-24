@@ -23,6 +23,7 @@ from services.common.copy_constants import (
     STATES_DIR_NAME,
     TMP_SUFFIX,
 )
+from services.common.time_utils import now_iso
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,9 +52,6 @@ _STATE_RE = re.compile(
 )
 
 
-def now_iso() -> str:
-    """Текущее время в ISO 8601 с миллисекундами."""
-    return datetime.now().isoformat(timespec="milliseconds")
 
 
 # --- Модели ---
@@ -244,6 +242,56 @@ class StateStore:
             reverse=True,
         )
         return result
+
+    def find_matching(
+        self,
+        data: StateData,
+        *,
+        exclude_kinds: set[str] | None = None,
+    ) -> str | None:
+        """Имя состояния с идентичным содержимым или None.
+
+        Сравниваются наборы «путь → sha256» и пустые директории.
+        `exclude_kinds` отбрасывает состояния по kind (например,
+        точки возврата). Раньше логика дублировалась в
+        copy_service и restore_service.
+        """
+        data_files = {f.path: f.sha256 for f in data.files}
+        data_empty = set(data.empty_dirs)
+        n_files = len(data.files)
+        n_empty = len(data.empty_dirs)
+        skip_kinds = exclude_kinds or set()
+
+        try:
+            infos = self.list()
+        except Exception as exc:
+            logger.debug("find_matching: list: %r", exc)
+            return None
+
+        for info in infos:
+            if info.files_count != n_files:
+                continue
+            if info.empty_dirs_count != n_empty:
+                continue
+            if skip_kinds and info.kind in skip_kinds:
+                continue
+            try:
+                candidate = self.load(info.path.name)
+            except Exception as exc:
+                logger.debug(
+                    "find_matching: load %s: %r",
+                    info.path.name, exc,
+                )
+                continue
+            cand_files = {
+                f.path: f.sha256 for f in candidate.files
+            }
+            if cand_files != data_files:
+                continue
+            if set(candidate.empty_dirs) != data_empty:
+                continue
+            return info.path.name
+        return None
 
     def latest(self) -> StateInfo | None:
         lst = self.list()

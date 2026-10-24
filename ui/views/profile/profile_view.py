@@ -168,6 +168,8 @@ class ProfileView(BaseView):
             on_run_after_toggle=self._on_run_after_toggle,
             on_check_on_startup_toggle=self._on_check_on_startup_toggle,
             on_mirror_toggle=self._on_mirror_toggle,
+            on_notify_changes_toggle=self._on_notify_changes_toggle,
+            on_notify_message_toggle=self._on_notify_message_toggle,
         )
         self._form.grid(
             row=1, column=0, sticky="ew",
@@ -500,6 +502,8 @@ class ProfileView(BaseView):
                 run_after_copy=False,
                 check_on_startup=False,
                 mirror_mode=False,
+                notify_on_changes=True,
+                notify_on_message=True,
             )
             self._form.update_open_buttons(
                 source_enabled=False,
@@ -522,6 +526,8 @@ class ProfileView(BaseView):
             run_after_copy=profile.run_after_copy,
             check_on_startup=profile.check_on_startup,
             mirror_mode=profile.mirror_mode,
+            notify_on_changes=profile.notify_on_changes,
+            notify_on_message=profile.notify_on_message,
         )
         self._update_open_buttons(profile)
         self._update_buttons_state(profile)
@@ -729,6 +735,34 @@ class ProfileView(BaseView):
         save_settings(self.window.settings)
         state = "включён" if profile.mirror_mode else "выключен"
         self.window.set_status(f"Режим зеркала {state}")
+
+    def _on_notify_changes_toggle(self) -> None:
+        profile = self._profile()
+        if profile is None:
+            return
+        profile.notify_on_changes = self._form.notify_on_changes
+        save_settings(self.window.settings)
+        self.window.refresh_monitor_config()
+        state = (
+            "включены" if profile.notify_on_changes else "выключены"
+        )
+        self.window.set_status(
+            f"Уведомления об изменениях файлов {state}",
+        )
+
+    def _on_notify_message_toggle(self) -> None:
+        profile = self._profile()
+        if profile is None:
+            return
+        profile.notify_on_message = self._form.notify_on_message
+        save_settings(self.window.settings)
+        self.window.refresh_monitor_config()
+        state = (
+            "включены" if profile.notify_on_message else "выключены"
+        )
+        self.window.set_status(
+            f"Уведомления о сообщении источника {state}",
+        )
 
     # --- Действия над профилем ---
 
