@@ -32,13 +32,18 @@ class Profile:
     exe_relative: str = ""
 
     create_backup: bool = True
+    create_backup_warned: bool = False
+
     run_after_copy: bool = False
     check_on_startup: bool = False
 
+    # Режим зеркала: файлы и папки в destination, которых нет
+    # в source, удаляются. CAS-состояния создаются принудительно,
+    # даже если create_backup=False, — иначе потери безвозвратны.
+    mirror_mode: bool = False
+
     pinned: bool = False
     last_used_at: str = ""
-
-    # --- Имя ---
 
     @property
     def display_name(self) -> str:
@@ -58,8 +63,6 @@ class Profile:
                 return base
         return ""
 
-    # --- Пути ---
-
     def exe_source_path(self) -> str:
         if not (self.exe_relative and self.source):
             return ""
@@ -69,8 +72,6 @@ class Profile:
         if not (self.exe_relative and self.destination):
             return ""
         return os.path.join(self.destination, self.exe_relative)
-
-    # --- Проверки ---
 
     def has_source_and_dest(self) -> bool:
         if not (self.source and self.destination):
@@ -118,4 +119,16 @@ class AppSettings:
     window_geometry: str = ""
     last_view: str = "main"
     hash_cache_enabled: bool = HASH_CACHE_ENABLED_DEFAULT
+
+    # Автопроверка при запуске для профилей, восстановленных
+    # из бэкапа. По умолчанию — False: такие профили
+    # пропускаются, чтобы не перезаписать восстановленные
+    # файлы новыми из источника.
+    run_autocheck_on_restored: bool = False
+
+    backup_keep_last_enabled: bool = False
+    backup_keep_last_n: int = 10
+    backup_delete_older_enabled: bool = False
+    backup_delete_older_days: int = 30
+
     profiles: list[Profile] = field(default_factory=list)

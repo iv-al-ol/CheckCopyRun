@@ -1,0 +1,126 @@
+# Project Rules (Python 3.14+ & Flet 1.0.0+)
+
+## 0. Workflow, AI Context & Task Lifecycle (CRITICAL)
+- **Context bootstrap**: BEFORE starting ANY task, always read every file inside the `.ai/` directory (`.ai/todo.md`, `.ai/changelog.md`, `.ai/system_architecture.md`, etc.) to load the current project context.
+- **Single active task**: Take into work ONLY the task listed in the `## 🎯 Текущая задача` block of `.ai/todo.md`. Never work on more than one task at a time.
+- **Empty current task**: If `## 🎯 Текущая задача` is empty, agree on the next task with the user and move it there from the `## 📋 Очередь задач` block of `.ai/todo.md` first.
+- **Task completion**: Once a task is finished AND tested, you MUST remove it from `.ai/todo.md` and record it in `.ai/changelog.md` with the current date and a short description of exactly what was done/changed in the code.
+
+## 1. Tech Stack, MCP Integration & Core Principles
+- **Language**: Python 3.14+. Strict PEP 8 compliance. Type hints are mandatory everywhere.
+- **Framework**: Flet 1.0.0+ (Production-ready). Declarative UI paradigm.
+- **MCP Validation**: BEFORE generating or updating any Flet controls, you MUST invoke the `flet-mcp` tool to verify actual 1.0.0+ component signatures and properties. Do not rely on pre-1.0 training data.
+- **Paradigm**: DRY, Single Responsibility Principle. Absolute ban on global variables. Maximum indentation nesting depth: 3.
+
+## 2. Localization (CRITICAL)
+- **ALL** UI text, inline comments, docstrings (Google style), commits, and system logs MUST be written exclusively in **Russian**.
+- Use the standard `logging` module for tracing. NEVER use `print()`.
+
+## 3. Flet 1.0.0+ Architecture & State Management
+- **Async Core**: All event handlers, background tasks, and initialization functions MUST be `async def`.
+- **Event Loop**: Never use synchronous `time.sleep()`. Use `await asyncio.sleep()`. Blockings tasks must be offloaded via `await asyncio.to_thread()`.
+- **Entry Point**: Define `def main(page: ft.Page)` and launch strictly via `ft.run(main)`.
+- **State Management**: Use declarative state hooks (`value, setter = ft.use_state(initial)`, `ft.use_effect()`) or `@dataclass` + `@ft.observable` for encapsulation. Global variables and global dictionaries for state are strictly forbidden.
+- **UI Updates**: NEVER call `page.update()` manually inside `@ft.component` declarative components (Flet 1.0.0 auto-updates UI based on state changes). In imperative code (e.g., routing), call `page.update()` explicitly.
+- **Routing**: Prefer declarative routing (`page.render(window)` / `page.render_views(window)`). Imperative routing via `page.views` + `page.on_route_change` + `page.on_view_pop` is allowed and is a standard Flet 1.0.0+ pattern.
+- **Properties & Constants**:
+  - For colors, use lower-case strings (`"red"`, `"#FF0000"`) or classes (`ft.Colors.RED`).
+  - For icons, use clean short strings (`"home"`, `"settings"`) or formal enum classes (`ft.Icons.HOME`). Syntax like `"icons.HOME"` is invalid.
+  - Buttons: Use `ft.Button(content=ft.Text("..."))` instead of the deprecated `ft.ElevatedButton(text="...")`.
+- **Background Tasks**: Register and run background tasks via `page.run_task(coroutine)`. Do not use the `threading` module.
+
+## 4. Code Quality & Error Handling
+- Catch only specific, granular exceptions (`except ValueError as e:`). Broad `except Exception:` blocks are banned.
+- Log infrastructure exceptions using `logger.error(..., exc_info=True)`.
+- Display user-facing errors gracefully through UI controls: `ft.SnackBar` or `ft.AlertDialog`.
+- Use context managers (`with` statements) for resource handling. Fetch all secrets strictly from environment variables via `os.getenv()`.
+- Define all magic numbers and configuration literals as UPPER_SNAKE_CASE constants.
+
+## 5. Testing
+- Testing Framework: `pytest`. Handle asynchronous tests via `pytest-asyncio`.
+- Test Naming Convention: `test_<target_function>_<test_condition>_<expected_outcome>`.
+- Isolate logic from layout: Mock Flet controls in unit tests. Do not test frontend rendering; test the underlying business logic and state transitions.
+
+## 6. Flet 1.0.0+ Cheat Sheet (verified via flet-mcp)
+- Consult this section FIRST. Invoke `flet-mcp` only for patterns not covered here.
+- After MCP verification, extend this section with the confirmed signature so future work needs fewer MCP calls.
+
+### Entry Point
+```python
+def main(page: ft.Page):
+    ...
+ft.run(main)
+```
+
+### Declarative Component & State Hooks
+```python
+@ft.component
+def App():
+    count, set_count = ft.use_state(0)
+    return ft.SafeArea(
+        content=ft.Row(
+            controls=[
+                ft.Text(value=f"{count}"),
+                ft.Button("Add", on_click=lambda: set_count(count + 1)),
+            ]
+        )
+    )
+```
+
+### Rendering & Observable State
+```python
+ft.run(lambda page: page.render(window))         # without View
+ft.run(lambda page: page.render_views(window))   # with View
+# Observable state:
+@dataclass
+@ft.observable
+class AppState:
+    counter: float
+    async def start_counter(self):
+        await asyncio.sleep(0.5)   # async methods are allowed
+```
+
+### Dialogs
+```python
+page.show_dialog(ft.SnackBar(ft.Text("...")))
+page.show_dialog(ft.AlertDialog(...))
+page.pop_dialog()
+```
+
+### Routing (Imperative, Standard Pattern)
+```python
+page.on_route_change = handler
+page.on_view_pop = async_handler          # e: ft.ViewPopEvent
+page.on_views_pop_until = handler         # e: ft.ViewsPopUntilEvent
+await page.push_route("/path")
+await page.pop_views_until("/", result="...")
+ft.View(can_pop=False, on_confirm_pop=...)  # await view.confirm_pop(True)
+page.update()  # required in imperative routing
+```
+
+### Naming: Colors, Icons, Layout
+```python
+ft.Colors.SURFACE_BRIGHT, ft.Colors.PINK
+ft.Icons.HOME, ft.Icons.HOME_OUTLINED, ft.Icons.ADD, ft.Icons.MENU
+ft.Padding.all(10)
+ft.Alignment.CENTER
+ft.MainAxisAlignment.SPACE_AROUND, ft.MainAxisAlignment.END
+ft.CrossAxisAlignment.CENTER
+ft.FontWeight.BOLD
+ft.TextThemeStyle.BODY_MEDIUM
+ft.Text(value=..., size=50)   # ft.ProgressBar(value) - positional
+```
+
+### Event Typing
+```python
+ft.Event[ft.Button], ft.Event[ft.TimePicker], ft.Event[ft.DialogControl]
+ft.ViewPopEvent, ft.ViewsPopUntilEvent, ft.TimePickerEntryModeChangeEvent
+```
+
+### Async in Handlers
+```python
+async def handler(e):
+    await page.push_route("/x")
+# from sync context:
+asyncio.create_task(page.push_route("/x"))
+```

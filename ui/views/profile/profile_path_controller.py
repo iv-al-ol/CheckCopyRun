@@ -4,9 +4,11 @@
 get_profile(). Сохранение и перерисовку делает View через
 on_changed(); обновление состояния кнопок — через on_state_refresh().
 
-При открытии папки: если путь задан, а директории нет — она
-пересоздаётся (пустая). Так пользователь может проверить содержимое
-или восстановить структуру, не перевыбирая папку.
+Логика выбора — в profile_paths. Здесь только связывание:
+диалог → проверка → запись в profile → notify.
+
+Извлечение иконки из exe обёрнуто в защиту — если оно падает,
+выбор exe всё равно сохраняется.
 """
 
 from __future__ import annotations
@@ -135,11 +137,21 @@ class ProfilePathController:
             )
             return
 
+        # Сохраняем exe — это главное действие пользователя.
+        # Извлечение иконки — дополнительное, и не должно ломать
+        # основной сценарий.
         profile.exe_relative = rel
-        self._maybe_set_icon_from_exe(profile)
+
+        try:
+            self._maybe_set_icon_from_exe(profile)
+        except Exception as exc:
+            logger.error(
+                "Извлечение иконки из exe не удалось: %r", exc,
+            )
+
         self._on_changed()
 
-    # --- Открытие папок (с пересозданием при необходимости) ---
+    # --- Открытие папок ---
 
     def open_source(self) -> bool:
         profile = self._get_profile()
@@ -173,6 +185,7 @@ class ProfilePathController:
         )
 
     def _maybe_set_icon_from_exe(self, profile: Profile) -> None:
+        """Пытается извлечь иконку из exe. Не влияет на выбор exe."""
         if not profile.icon_auto:
             return
 
@@ -180,9 +193,16 @@ class ProfilePathController:
         if not full or not os.path.isfile(full):
             return
 
-        png = save_exe_icon(Path(full), get_icons_dir())
+        try:
+            png = save_exe_icon(Path(full), get_icons_dir())
+        except Exception as exc:
+            logger.error("save_exe_icon упал: %r", exc)
+            return
+
         if png is None:
-            logger.debug("Иконка exe не извлечена для %s", full)
+            logger.debug(
+                "Иконка exe не извлечена для %s", full,
+            )
             return
 
         profile.icon = str(png)

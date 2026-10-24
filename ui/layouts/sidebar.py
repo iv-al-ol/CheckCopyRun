@@ -1,7 +1,31 @@
-"""Боковое меню с динамическим списком профилей."""
+"""Боковое меню с динамическим списком профилей.
+
+Публичный API:
+    Sidebar(master, *, on_select, on_add_profile, on_run_profile,
+            on_profile_context, ...)
+
+    rebuild_profiles(profiles)   — пересобрать список профилей;
+    set_active(key)              — отметить активный (открытый) пункт;
+    clear_selection()            — сбросить множественное выделение;
+    get_selected_ids()           — текущее выделение (list[str]).
+
+Множественное выделение:
+  • Ctrl+клик — toggle;
+  • Shift+клик — диапазон от anchor;
+  • ПКМ по невыделенному — выделяется один;
+  • drag по пустому месту — рамка выделения. Выделение
+    обновляется в реальном времени на каждом движении мыши.
+  • клик ЛКМ или ПКМ вне списка профилей — сбрасывает
+    выделение (контентная область, статус-бар, заголовок
+    сайдбара, «Главный», «Настройки», «Добавить профиль»).
+    ПКМ внутри списка — контекстное меню профиля, не сброс.
+
+on_profile_context принимает (pids, x_root, y_root).
+"""
 
 from __future__ import annotations
 
+import tkinter as tk
 from collections.abc import Callable
 
 import customtkinter as ctk
@@ -9,21 +33,20 @@ import customtkinter as ctk
 from config.constants import (
     DEFAULT_PROFILE_ICON,
     SEPARATOR_PADY,
-    SIDEBAR_ITEM_HEIGHT,
     SIDEBAR_ITEM_PADY_TOP,
     SIDEBAR_SETTINGS_PADY_BOTTOM,
     SIDEBAR_WIDTH,
 )
 from core.models import Profile
-from ui.components.image_utils import (
-    load_ctk_image,
-    looks_like_image_path,
+from services.selection_model import SelectionModel
+from ui.components.nav_item import (
+    NAV_BG,
+    NAV_TEXT,
+    NavItem,
 )
 from ui.components.scrollable import AutoHideScrollableFrame
 from ui.components.separator import make_separator
-from ui.components.tooltip import Tooltip
-from ui.fonts import get_emoji_font, get_font
-from ui.palette import SUCCESS, SUCCESS_HOVER, SUCCESS_TEXT
+from ui.fonts import get_font
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -44,192 +67,22 @@ def parse_profile_key(key: str) -> str | None:
     return key[len(PROFILE_KEY_PREFIX):]
 
 
-# --- Цвета ---
-_NAV_BG = ("gray90", "gray17")
-_HOVER_COLOR = ("gray80", "gray25")
-_ACTIVE_COLOR = ("gray70", "gray30")
-_TEXT_COLOR = ("gray10", "gray90")
-
-# --- Геометрия ---
-_ITEM_RADIUS = 8
+# --- Геометрия и тексты ---
 _ITEM_PADX = 8
-_RUN_BUTTON_WIDTH = 28
-_RUN_BUTTON_PADX = 6
-_FONT_SIZE = 13
-_EMOJI_FONT_SIZE = 14
-
-_ICON_WRAPPER_SIZE = 28
-_ICON_WRAPPER_PADX_LEFT = 8
-_ICON_WRAPPER_PADX_RIGHT = 4
-
 _SEPARATOR_PADX = 12
 
-_RUN_TOOLTIP_TEXT = "Проверить директорию и запустить приложение"
-_RUN_TOOLTIP_DELAY_MS = 400
+_ADD_PROFILE_LABEL = "Добавить профиль"
+_RUN_TOOLTIP_TEXT = "Запустить"
+_TITLE_FONT_SIZE = 17
 
+# Модификаторы event.state.
+_STATE_SHIFT = 0x0001
+_STATE_CTRL = 0x0004
 
-class _NavItem(ctk.CTkFrame):
-    """Пункт сайдбара: иконка + текст + опциональная кнопка запуска."""
-
-    def __init__(
-        self,
-        master,
-        *,
-        icon: str,
-        text: str,
-        on_click: Callable[[], None],
-        on_context: Callable[[int, int], None] | None = None,
-        on_run: Callable[[], None] | None = None,
-        run_tooltip: str | None = None,
-        bold: bool = False,
-    ):
-        super().__init__(
-            master,
-            fg_color=_NAV_BG,
-            corner_radius=_ITEM_RADIUS,
-            height=SIDEBAR_ITEM_HEIGHT,
-        )
-        self.grid_propagate(False)
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
-
-        self._on_click_cb = on_click
-        self._active = False
-        self._hover = False
-        self._run_tooltip: Tooltip | None = None
-
-        icon_wrapper = ctk.CTkFrame(
-            self,
-            fg_color="transparent",
-            width=_ICON_WRAPPER_SIZE,
-            height=_ICON_WRAPPER_SIZE,
-        )
-        icon_wrapper.grid_propagate(False)
-        icon_wrapper.grid(
-            row=0, column=0,
-            padx=(_ICON_WRAPPER_PADX_LEFT, _ICON_WRAPPER_PADX_RIGHT),
-        )
-
-        image = (
-            load_ctk_image(icon, _ICON_WRAPPER_SIZE)
-            if looks_like_image_path(icon)
-            else None
-        )
-        if image is not None:
-            icon_label: ctk.CTkLabel = ctk.CTkLabel(
-                icon_wrapper, image=image, text="",
-            )
-        else:
-            icon_label = ctk.CTkLabel(
-                icon_wrapper,
-                text=icon or " ",
-                anchor="center",
-                font=get_emoji_font(_EMOJI_FONT_SIZE),
-                text_color=_TEXT_COLOR,
-            )
-        icon_label.place(relx=0.5, rely=0.5, anchor="center")
-
-        self._text_label = ctk.CTkLabel(
-            self,
-            text=text,
-            anchor="w",
-            justify="left",
-            text_color=_TEXT_COLOR,
-            font=get_font(_FONT_SIZE, "bold" if bold else "normal"),
-        )
-        self._text_label.grid(
-            row=0, column=1, sticky="ew", padx=(0, 8),
-        )
-
-        self._run_button: ctk.CTkButton | None = None
-        if on_run is not None:
-            self._run_button = ctk.CTkButton(
-                self,
-                text="▶",
-                width=_RUN_BUTTON_WIDTH,
-                height=SIDEBAR_ITEM_HEIGHT - 10,
-                corner_radius=6,
-                font=get_font(11),
-                command=on_run,
-                fg_color=SUCCESS,
-                hover_color=SUCCESS_HOVER,
-                text_color=SUCCESS_TEXT,
-            )
-            self._run_button.grid(
-                row=0, column=2, padx=(0, _RUN_BUTTON_PADX),
-            )
-            if run_tooltip:
-                self._run_tooltip = Tooltip(
-                    self._run_button,
-                    run_tooltip,
-                    delay_ms=_RUN_TOOLTIP_DELAY_MS,
-                )
-
-        targets: list = [self, icon_wrapper, icon_label, self._text_label]
-        for w in targets:
-            w.bind("<Button-1>", self._handle_click, add="+")
-            w.bind("<Enter>", self._handle_enter, add="+")
-            w.bind("<Leave>", self._handle_leave, add="+")
-            if on_context is not None:
-                w.bind(
-                    "<Button-3>",
-                    lambda e, cb=on_context: cb(e.x_root, e.y_root),
-                    add="+",
-                )
-
-    def set_active(self, active: bool) -> None:
-        self._active = active
-        self._apply_bg()
-
-    def _handle_click(self, _event=None) -> None:
-        try:
-            self._on_click_cb()
-        except Exception as exc:
-            logger.error("Ошибка клика пункта: %r", exc)
-
-    def _handle_enter(self, _event=None) -> None:
-        if not self._hover:
-            self._hover = True
-            self._apply_bg()
-
-    def _handle_leave(self, _event=None) -> None:
-        try:
-            self.after(20, self._check_hover)
-        except Exception as exc:
-            logger.debug("after() при Leave: %r", exc)
-
-    def _check_hover(self) -> None:
-        try:
-            under = self.winfo_containing(
-                self.winfo_pointerx(), self.winfo_pointery(),
-            )
-        except Exception as exc:
-            logger.debug("winfo_containing: %r", exc)
-            return
-        if under is None or not self._is_inside(under):
-            if self._hover:
-                self._hover = False
-                self._apply_bg()
-
-    def _is_inside(self, widget) -> bool:
-        current = widget
-        while current is not None:
-            if current is self:
-                return True
-            current = getattr(current, "master", None)
-        return False
-
-    def _apply_bg(self) -> None:
-        if self._active:
-            color = _ACTIVE_COLOR
-        elif self._hover:
-            color = _HOVER_COLOR
-        else:
-            color = _NAV_BG
-        try:
-            self.configure(fg_color=color)
-        except Exception as exc:
-            logger.debug("configure(fg_color): %r", exc)
+# Рамка выделения.
+_DRAG_RECT_MIN_SIZE = 5
+_DRAG_RECT_ALPHA = 0.35
+_DRAG_RECT_COLOR = "#3a8bdc"
 
 
 class Sidebar(ctk.CTkFrame):
@@ -242,12 +95,12 @@ class Sidebar(ctk.CTkFrame):
         on_select: Callable[[str], None],
         on_add_profile: Callable[[], None],
         on_run_profile: Callable[[str], None],
-        on_profile_context: Callable[[str, int, int], None],
+        on_profile_context: Callable[[list[str], int, int], None],
         title: str = "CheckCopyRun",
         width: int = SIDEBAR_WIDTH,
     ):
         super().__init__(
-            master, width=width, corner_radius=0, fg_color=_NAV_BG,
+            master, width=width, corner_radius=0, fg_color=NAV_BG,
         )
         self.grid_propagate(False)
         self.grid_columnconfigure(0, weight=1)
@@ -258,17 +111,33 @@ class Sidebar(ctk.CTkFrame):
         self._on_run_profile = on_run_profile
         self._on_profile_context = on_profile_context
 
-        self._nav_items: dict[str, _NavItem] = {}
-        self._profile_rows: dict[str, _NavItem] = {}
+        self._nav_items: dict[str, NavItem] = {}
+        self._profile_rows: dict[str, NavItem] = {}
         self._active_key: str | None = None
+
+        self._selection = SelectionModel()
+
+        # Состояние drag-выделения.
+        self._drag_start: tuple[int, int] | None = None
+        self._drag_rect: tk.Toplevel | None = None
+        self._drag_active = False
+        self._drag_item_rects: (
+            dict[str, tuple[int, int, int, int]] | None
+        ) = None
 
         self._build_static(title)
         self._profiles_container = self._build_scroll_and_bottom()
+        self._setup_drag_selection()
+        self._setup_global_click()
+
+    # --- Статическая часть ---
 
     def _build_static(self, title: str) -> None:
         ctk.CTkLabel(
-            self, text=title, font=get_font(17, "bold"),
-            text_color=_TEXT_COLOR,
+            self,
+            text=title,
+            font=get_font(_TITLE_FONT_SIZE, "bold"),
+            text_color=NAV_TEXT,
         ).grid(row=0, column=0, sticky="w", padx=18, pady=(20, 16))
 
         self._add_nav_item(
@@ -276,11 +145,11 @@ class Sidebar(ctk.CTkFrame):
         )
         self._add_separator(row=2)
 
-        add_item = _NavItem(
+        add_item = NavItem(
             self,
             icon="➕",
-            text="Добавить профиль",
-            on_click=self._safe_call_noarg(
+            text=_ADD_PROFILE_LABEL,
+            on_click=self._wrap_click(
                 self._on_add_profile, "add profile",
             ),
             bold=True,
@@ -323,13 +192,14 @@ class Sidebar(ctk.CTkFrame):
         text: str,
         bold: bool = False,
         pady_bottom: int = SIDEBAR_ITEM_PADY_TOP,
-    ) -> _NavItem:
-        item = _NavItem(
+    ) -> NavItem:
+        item = NavItem(
             self,
             icon=icon,
             text=text,
-            on_click=self._safe_call_noarg(
-                lambda k=key: self._on_select(k), f"select {key}",
+            on_click=self._wrap_click(
+                lambda k=key: self._on_select(k),
+                f"select {key}",
             ),
             bold=bold,
         )
@@ -341,10 +211,18 @@ class Sidebar(ctk.CTkFrame):
         self._nav_items[key] = item
         return item
 
+    # --- Профили ---
+
     def rebuild_profiles(self, profiles: list[Profile]) -> None:
+        # Активный drag может содержать устаревшие rects —
+        # отменяем его.
+        self._reset_drag_state()
+
         for row in self._profile_rows.values():
             row.destroy()
         self._profile_rows.clear()
+
+        self._selection.set_items([p.id for p in profiles])
 
         for idx, p in enumerate(profiles):
             row = self._make_profile_row(p)
@@ -356,6 +234,8 @@ class Sidebar(ctk.CTkFrame):
 
         if self._active_key is not None:
             self.set_active(self._active_key)
+
+        self._apply_selection()
 
         try:
             self._profiles_container.check_scroll()
@@ -369,42 +249,282 @@ class Sidebar(ctk.CTkFrame):
         for pid, item in self._profile_rows.items():
             item.set_active(profile_key(pid) == key)
 
-    def _make_profile_row(self, profile: Profile) -> _NavItem:
-        # Кнопка запуска доступна, если можно копировать: сам клик
-        # выполнит копирование и затем запуск.
+    def clear_selection(self) -> None:
+        self._selection.clear()
+        self._apply_selection()
+
+    def get_selected_ids(self) -> list[str]:
+        return self._selection.get_selected()
+
+    # --- Построение строки профиля ---
+
+    def _make_profile_row(self, profile: Profile) -> NavItem:
         on_run = None
         if profile.can_copy():
-            on_run = self._safe_call_noarg(
+            on_run = self._wrap_noarg(
                 lambda pid=profile.id: self._on_run_profile(pid),
                 f"run profile {profile.id}",
             )
 
-        def on_context(x: int, y: int, pid: str = profile.id) -> None:
-            try:
-                self._on_profile_context(pid, x, y)
-            except Exception as exc:
-                logger.error(
-                    "Ошибка контекстного меню профиля %s: %r",
-                    pid, exc,
-                )
-
-        return _NavItem(
+        item = NavItem(
             self._profiles_container,
             icon=profile.icon or DEFAULT_PROFILE_ICON,
             text=profile.display_name,
-            on_click=self._safe_call_noarg(
-                lambda pid=profile.id: self._on_select(
-                    profile_key(pid),
-                ),
-                f"select profile {profile.id}",
+            on_click=lambda ev, pid=profile.id: (
+                self._handle_profile_click(pid, ev)
             ),
-            on_context=on_context,
             on_run=on_run,
             run_tooltip=_RUN_TOOLTIP_TEXT if on_run else None,
         )
+        item.set_on_context(
+            lambda ev, pid=profile.id: (
+                self._handle_profile_context(pid, ev)
+            ),
+        )
+        return item
+
+    # --- Обработчики профиля ---
+
+    def _handle_profile_click(
+        self, pid: str, event,
+    ) -> None:
+        ctrl = bool(event.state & _STATE_CTRL)
+        shift = bool(event.state & _STATE_SHIFT)
+
+        self._selection.handle_click(
+            pid, ctrl=ctrl, shift=shift,
+        )
+        self._apply_selection()
+
+        # Навигация — только без модификаторов.
+        if not ctrl and not shift:
+            try:
+                self._on_select(profile_key(pid))
+            except Exception as exc:
+                logger.error(
+                    "Ошибка навигации профиля %s: %r", pid, exc,
+                )
+
+    def _handle_profile_context(
+        self, pid: str, event,
+    ) -> None:
+        self._selection.handle_right_click(pid)
+        self._apply_selection()
+
+        pids = self._selection.get_selected() or [pid]
+        try:
+            self._on_profile_context(
+                pids, event.x_root, event.y_root,
+            )
+        except Exception as exc:
+            logger.error(
+                "Ошибка контекстного меню профиля: %r", exc,
+            )
+
+    def _apply_selection(self) -> None:
+        selected = self._selection.get_selected_set()
+        for pid, item in self._profile_rows.items():
+            try:
+                item.set_selected(pid in selected)
+            except Exception as exc:
+                logger.debug("set_selected: %r", exc)
+
+    # --- Глобальный клик: сброс выделения вне списка ---
+
+    def _setup_global_click(self) -> None:
+        """Клик (ЛКМ или ПКМ) вне списка профилей — сброс.
+
+        Bind на toplevel главного окна. Порядок bindtags:
+        widget → class → toplevel → all. Клик по NavItem
+        сначала обновляет selection в самом NavItem (для ЛКМ —
+        через _handle_profile_click, для ПКМ — через
+        _handle_profile_context), затем срабатывает наш
+        toplevel-handler; он видит, что клик внутри
+        _profiles_container, и не сбрасывает.
+
+        Диалоги и контекстные меню — отдельные Toplevel,
+        здесь их не касается.
+        """
+        try:
+            root = self.winfo_toplevel()
+            root.bind(
+                "<Button-1>", self._on_global_click, add="+",
+            )
+            root.bind(
+                "<Button-3>", self._on_global_click, add="+",
+            )
+        except Exception as exc:
+            logger.debug(
+                "bind global click: %r", exc,
+            )
+
+    def _on_global_click(self, event) -> None:
+        if self._is_inside_profiles_container(event.widget):
+            return
+        # Клик вне списка профилей — сбрасываем множественное
+        # выделение.
+        if self._selection.count() == 0:
+            return
+        self.clear_selection()
+
+    def _is_inside_profiles_container(self, widget) -> bool:
+        """Клик внутри списка профилей (пункт, canvas, frame,
+        скроллбар) — не сбрасываем: там своя логика.
+        """
+        current = widget
+        while current is not None:
+            if current is self._profiles_container:
+                return True
+            current = getattr(current, "master", None)
+        return False
+
+    # --- Drag-выделение ---
+
+    def _setup_drag_selection(self) -> None:
+        """Bind на внутренний canvas: только клики вне NavItem
+        начинают рамку."""
+        try:
+            canvas = self._profiles_container._parent_canvas
+        except Exception as exc:
+            logger.debug("drag: canvas недоступен: %r", exc)
+            return
+
+        canvas.bind(
+            "<ButtonPress-1>",
+            self._on_drag_start, add="+",
+        )
+        canvas.bind(
+            "<B1-Motion>",
+            self._on_drag_motion, add="+",
+        )
+        canvas.bind(
+            "<ButtonRelease-1>",
+            self._on_drag_end, add="+",
+        )
+
+    def _is_inside_nav_item(self, widget) -> bool:
+        current = widget
+        while current is not None:
+            if isinstance(current, NavItem):
+                return True
+            current = getattr(current, "master", None)
+        return False
+
+    def _on_drag_start(self, event) -> None:
+        if self._is_inside_nav_item(event.widget):
+            self._drag_start = None
+            return
+        self._reset_drag_state()
+        self._drag_start = (event.x_root, event.y_root)
+
+    def _on_drag_motion(self, event) -> None:
+        if self._drag_start is None:
+            return
+        x0, y0 = self._drag_start
+        x1, y1 = event.x_root, event.y_root
+
+        if not self._drag_active:
+            if (
+                abs(x1 - x0) < _DRAG_RECT_MIN_SIZE
+                and abs(y1 - y0) < _DRAG_RECT_MIN_SIZE
+            ):
+                return
+            self._drag_active = True
+            self._drag_item_rects = self._collect_item_rects()
+            self._create_drag_rect()
+
+        self._update_drag_rect(x0, y0, x1, y1)
+
+        if self._drag_item_rects is not None:
+            rect = (
+                min(x0, x1), min(y0, y1),
+                max(x0, x1), max(y0, y1),
+            )
+            ids = self._selection.ids_in_rect(
+                rect, self._drag_item_rects,
+            )
+            self._selection.select_many(ids)
+            self._apply_selection()
+
+    def _on_drag_end(self, event) -> None:
+        self._reset_drag_state()
+
+    def _reset_drag_state(self) -> None:
+        self._destroy_drag_rect()
+        self._drag_start = None
+        self._drag_active = False
+        self._drag_item_rects = None
+
+    def _create_drag_rect(self) -> None:
+        try:
+            rect = tk.Toplevel(self)
+            rect.overrideredirect(True)
+            try:
+                rect.attributes("-topmost", True)
+                rect.attributes("-alpha", _DRAG_RECT_ALPHA)
+            except Exception as exc:
+                logger.debug("drag: attributes: %r", exc)
+            rect.configure(bg=_DRAG_RECT_COLOR)
+            self._drag_rect = rect
+        except Exception as exc:
+            logger.error("drag: не создать рамку: %r", exc)
+            self._drag_rect = None
+
+    def _update_drag_rect(
+        self, x0: int, y0: int, x1: int, y1: int,
+    ) -> None:
+        if self._drag_rect is None:
+            return
+        left = min(x0, x1)
+        top = min(y0, y1)
+        width = max(1, abs(x1 - x0))
+        height = max(1, abs(y1 - y0))
+        try:
+            self._drag_rect.geometry(
+                f"{width}x{height}+{left}+{top}"
+            )
+        except Exception as exc:
+            logger.debug("drag: geometry: %r", exc)
+
+    def _destroy_drag_rect(self) -> None:
+        if self._drag_rect is None:
+            return
+        try:
+            self._drag_rect.destroy()
+        except Exception as exc:
+            logger.debug("drag: destroy: %r", exc)
+        self._drag_rect = None
+
+    def _collect_item_rects(
+        self,
+    ) -> dict[str, tuple[int, int, int, int]]:
+        result: dict[str, tuple[int, int, int, int]] = {}
+        for pid, item in self._profile_rows.items():
+            try:
+                x = item.winfo_rootx()
+                y = item.winfo_rooty()
+                w = item.winfo_width()
+                h = item.winfo_height()
+                result[pid] = (x, y, x + w, y + h)
+            except Exception:
+                continue
+        return result
+
+    # --- Обёртки кликов ---
 
     @staticmethod
-    def _safe_call_noarg(callback: Callable[[], None], what: str):
+    def _wrap_click(callback: Callable[[], None], what: str):
+        """Для статических пунктов: on_click(event) → callback()."""
+        def wrapper(_event=None) -> None:
+            try:
+                callback()
+            except Exception as exc:
+                logger.error("Ошибка %s: %r", what, exc)
+        return wrapper
+
+    @staticmethod
+    def _wrap_noarg(callback: Callable[[], None], what: str):
+        """Для on_run: callback() без event."""
         def wrapper() -> None:
             try:
                 callback()

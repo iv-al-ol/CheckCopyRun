@@ -1,8 +1,11 @@
 """Действия над профилями: создание, переименование, иконка, удаление.
 
-Выделено из MainWindow, чтобы он оставался оркестратором, а не
-монолитом. Контроллер работает с settings, sidebar и диалогами;
-сам не рисует никакого UI.
+Выделено из MainWindow, чтобы он оставался оркестратором.
+Контроллер работает с settings, sidebar и диалогами; сам не
+рисует никакого UI.
+
+При смене иконки и удалении профилей вызывается очистка PNG,
+на которые больше не ссылается ни один профиль.
 """
 
 from __future__ import annotations
@@ -12,9 +15,10 @@ from pathlib import Path
 from config.constants import DEFAULT_PROFILE_NAME_PREFIX
 from core.models import Profile
 from core.settings_store import save_settings
+from services.icon_cleanup import cleanup_unused_icons
 from ui.components.icon_picker import pick_icon
 from ui.dialogs.profile_dialogs import (
-    ask_delete_profile,
+    ask_delete_profiles,
     ask_profile_name,
 )
 from utils.logger import get_logger
@@ -116,37 +120,66 @@ class ProfileActionController:
 
         profile.icon, profile.icon_auto = result
         save_settings(self._window.settings)
+
+        self._cleanup_icons()
+
         self._window.refresh_sidebar()
         self._reload_view_if_open(pid)
         self._window.refresh_main_view()
         self._window.set_status("Иконка профиля обновлена")
 
-    # --- Удаление ---
+    # --- Удаление (одиночное и массовое) ---
 
-    def delete(self, pid: str) -> None:
-        profile = self.find(pid)
-        if profile is None:
+    def delete_many(self, pids: list[str]) -> None:
+        """Удалить набор профилей после одного подтверждения.
+
+        Один диалог, одно сохранение настроек, один refresh.
+        """
+        if not pids:
             return
 
-        if not ask_delete_profile(
+        profiles: list[Profile] = []
+        for pid in pids:
+            p = self.find(pid)
+            if p is not None:
+                profiles.append(p)
+
+        if not profiles:
+            return
+
+        names = [p.display_name for p in profiles]
+        if not ask_delete_profiles(
             self._window,
-            profile.display_name,
+            names,
             self._window.is_parent_visible(),
         ):
             return
 
-        removed_name = profile.display_name
+        removed_ids = {p.id for p in profiles}
+        removed_count = len(profiles)
+
         self._window.settings.profiles = [
-            p for p in self._window.settings.profiles if p.id != pid
+            p for p in self._window.settings.profiles
+            if p.id not in removed_ids
         ]
         save_settings(self._window.settings)
+
+        self._cleanup_icons()
+
         self._window.refresh_sidebar()
         self._window.refresh_main_view()
 
-        if self._window.active_profile_id == pid:
+        if self._window.active_profile_id in removed_ids:
             self._window.show_main()
 
-        self._window.set_status(f"Профиль удалён: {removed_name}")
+        if removed_count == 1:
+            self._window.set_status(
+                f"Профиль удалён: {names[0]}",
+            )
+        else:
+            self._window.set_status(
+                f"Удалено профилей: {removed_count}",
+            )
 
     # --- Вспомогательное ---
 
@@ -173,3 +206,9 @@ class ProfileActionController:
                 logger.error(
                     "Перезагрузка ProfileView упала: %r", exc,
                 )
+
+    def _cleanup_icons(self) -> None:
+        try:
+            cleanup_unused_icons(self._window.settings)
+        except Exception as exc:
+            logger.debug("cleanup_unused_icons: %r", exc)

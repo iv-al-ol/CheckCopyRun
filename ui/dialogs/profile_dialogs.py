@@ -1,4 +1,16 @@
-"""Диалоги работы с профилями: переименование, удаление."""
+"""Диалоги работы с профилями: переименование, удаление.
+
+ask_delete_profiles:
+  • один профиль  — диалог 420 px, заголовок с именем;
+  • несколько     — диалог 440 px, заголовок «Удалить профили?»
+                    без числа (список ниже уже показывает кого),
+                    превью списка до _DELETE_PREVIEW_LIMIT имён,
+                    по центру.
+
+Кнопки «Удалить» / «Отмена» отцентрированы с гарантированным
+отступом от краёв: btns_padx считается так, чтобы диалог был
+шириной не меньше dialog_width независимо от длины текста.
+"""
 
 from __future__ import annotations
 
@@ -21,12 +33,20 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Ширина диалога. Multi чуть шире single — там список профилей,
+# но без излишней ширины: 440 px достаточно с запасом.
 _DIALOG_WIDTH = 420
+_DIALOG_WIDTH_MULTI = 440
 
-# Ширина кнопок в ряду — одинаковая для всех кнопок ряда.
 _RENAME_BUTTON_WIDTH = 140
 _DELETE_BUTTON_WIDTH = 130
+_DELETE_BUTTON_GAP = 8
 
+# Сколько профилей показать в списке подтверждения удаления.
+_DELETE_PREVIEW_LIMIT = 8
+
+
+# --- Переименование ---
 
 def ask_profile_name(
     parent,
@@ -106,36 +126,93 @@ def ask_profile_name(
     return result["value"]
 
 
-def ask_delete_profile(
+# --- Удаление ---
+
+def _delete_buttons_padx(dialog_width: int) -> int:
+    """Отступ контейнера кнопок от краёв диалога.
+
+    Гарантирует минимальную ширину диалога:
+    buttons_width + 2*padx = dialog_width.
+    Даёт кнопкам визуальный отступ от границ даже если
+    окружающий текст короче.
+    """
+    buttons_width = (
+        2 * _DELETE_BUTTON_WIDTH + _DELETE_BUTTON_GAP
+    )
+    padx = (dialog_width - buttons_width) // 2
+    return max(32, padx)
+
+
+def ask_delete_profiles(
     parent,
-    name: str,
+    names: list[str],
     parent_visible: bool,
 ) -> bool:
-    """Подтверждение удаления профиля. True — удалить."""
+    """Подтверждение удаления одного или нескольких профилей.
+
+    names — display_name профилей. Для одного — простой диалог
+    с именем, для нескольких — заголовок без числа + превью
+    списка (имена уже показаны, дублировать число незачем).
+    """
+    if not names:
+        return False
+
     result = {"value": False}
+
+    is_multi = len(names) > 1
+    dialog_width = (
+        _DIALOG_WIDTH_MULTI if is_multi else _DIALOG_WIDTH
+    )
+    content_width = dialog_width - 48
+    btns_padx = _delete_buttons_padx(dialog_width)
 
     dialog = setup_dialog(parent, "Удаление профиля", parent_visible)
 
-    ctk.CTkLabel(
-        dialog,
-        text=f"Удалить профиль «{name}»?",
-        anchor="center",
-        justify="center",
-        wraplength=_DIALOG_WIDTH - 48,
-        font=get_font(14, "bold"),
-    ).pack(padx=32, pady=(24, 4), fill="x")
+    if len(names) == 1:
+        title = f"Удалить профиль «{names[0]}»?"
+    else:
+        title = "Удалить профили?"
+    subtitle = "Это действие нельзя отменить."
 
     ctk.CTkLabel(
         dialog,
-        text="Это действие нельзя отменить.",
+        text=title,
         anchor="center",
         justify="center",
+        wraplength=content_width,
+        font=get_font(14, "bold"),
+    ).pack(padx=32, pady=(24, 4), fill="x")
+
+    if is_multi:
+        preview_lines = [
+            f"• {n}"
+            for n in names[:_DELETE_PREVIEW_LIMIT]
+        ]
+        extra = len(names) - _DELETE_PREVIEW_LIMIT
+        if extra > 0:
+            preview_lines.append(f"… и ещё {extra}")
+
+        ctk.CTkLabel(
+            dialog,
+            text="\n".join(preview_lines),
+            anchor="center",
+            justify="center",
+            wraplength=content_width,
+            font=get_font(11),
+        ).pack(padx=32, pady=(0, 8), fill="x")
+
+    ctk.CTkLabel(
+        dialog,
+        text=subtitle,
+        anchor="center",
+        justify="center",
+        wraplength=content_width,
         text_color=("gray40", "gray60"),
         font=get_font(11),
     ).pack(padx=32, pady=(0, 16), fill="x")
 
     btns = ctk.CTkFrame(dialog, fg_color="transparent")
-    btns.pack(pady=(0, 20))
+    btns.pack(pady=(0, 20), padx=btns_padx)
 
     def on_delete() -> None:
         result["value"] = True
@@ -150,7 +227,9 @@ def ask_delete_profile(
         variant=VARIANT_DANGER,
         width=_DELETE_BUTTON_WIDTH,
         command=on_delete,
-    ).pack(side="left", padx=(0, 8))
+    ).pack(
+        side="left", padx=(0, _DELETE_BUTTON_GAP),
+    )
 
     StyledButton(
         btns, text="Отмена",

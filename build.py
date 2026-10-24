@@ -1,8 +1,10 @@
 """Сборка CheckCopyRun через Nuitka.
 
+Имя .exe и папки сборки — CCRun (сокращение от CheckCopyRun).
+
 Запуск:
-    uv run build.py                 # папочная сборка (.dist)
-    uv run build.py --onefile       # единый .exe
+    uv run build.py                 # папочная сборка (CCRun.dist/)
+    uv run build.py --onefile       # единый CCRun.exe
     uv run build.py --debug         # с консолью (для отладки)
 
 Что делает:
@@ -10,7 +12,7 @@
   2. Читает APP_NAME / APP_TITLE / APP_VERSION из constants.
   3. Удаляет старые артефакты, чтобы не смешивались.
   4. Запускает Nuitka.
-  5. Переименовывает main.build / main.dist в CheckCopyRun.*
+  5. Переименовывает main.build / main.dist в CCRun.*
   6. Печатает путь к готовому .exe.
 
 Иконка берётся из assets/icon.ico: встраивается в .exe
@@ -28,13 +30,16 @@ from pathlib import Path
 # --- Параметры сборки ---
 
 ENTRY_SCRIPT = "main.py"
-OUTPUT_NAME = "CheckCopyRun"
+# Имя exe и папки сборки — CCRun (сокращение от CheckCopyRun).
+# Метаданные exe (CompanyName / ProductName) берутся из
+# config/constants.py — APP_NAME / APP_TITLE.
+OUTPUT_NAME = "CCRun"
 ICON_FILE = "assets/icon.ico"
 ASSETS_DIR = "assets"
 OUTPUT_DIR = "build"
 
 # Nuitka создаёт папки по имени главного скрипта: main.build,
-# main.dist, main.onefile-build. Переименовываем в CheckCopyRun.*
+# main.dist, main.onefile-build. Переименовываем в CCRun.*
 _MAIN_STEM = Path(ENTRY_SCRIPT).stem
 _RENAMED_STEM = OUTPUT_NAME
 
@@ -225,7 +230,7 @@ def _clean_output(project_root: Path) -> None:
 
 
 def _rename_artifacts(project_root: Path) -> None:
-    """Переименовывает main.* в CheckCopyRun.*"""
+    """Переименовывает main.* в CCRun.*"""
     out_dir = project_root / OUTPUT_DIR
     if not out_dir.exists():
         return

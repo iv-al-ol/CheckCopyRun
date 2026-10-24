@@ -1,0 +1,75 @@
+# --- Игнорирование системных каталогов ИИ ---
+.git/
+.github/
+.cline/
+.roo/
+.zoo/
+
+# --- Виртуальное окружение и кэш Python (не несут полезной логики для ИИ) ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Специфичные папки сборщика Flet и тяжелые артефакты компиляции ---
+.flet/
+flet_bundle/
+build/
+dist/
+*.apk
+*.aab
+*.ipa
+*.exe
+*.dmg
+*.msi
+
+# --- Настройки сред разработки (IDE) ---
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# --- Файлы статических ресурсов (картинки, шрифты, аудио) ---
+assets/images/
+assets/fonts/
+assets/audio/
+assets/video/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.ttf
+*.otf
+*.mp3
+*.wav
+*.mp4
+*.avi
+
+# --- Секреты, настройки среды и локальные базы данных ---
+.env
+.env.*
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# --- Документы сборки и отчеты о покрытии кода ---
+htmlcov/
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.mo
+*.po

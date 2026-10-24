@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import customtkinter as ctk
@@ -15,15 +16,34 @@ from config.constants import (
 from core.models import AppSettings, Profile
 from core.paths import get_asset_path
 from core.settings_store import load_settings, save_settings
+from services.backup_cleanup import (
+    CleanupPolicy,
+    cleanup_states,
+)
 from services.copy_service import (
+    PHASE_SAVE_SCAN,
+    PHASE_SAVE_STORE,
+    CopyProgress,
     CopyResult,
     CopyService,
     format_cancel_status,
+    format_copy_status,
+)
+from services.disk_space import check_disk_space
+from services.icon_cleanup import cleanup_unused_icons
+from services.mirror_check import scan_mirror_diff
+from services.restore_service import (
+    RestoreProgress,
+    RestoreResult,
+    RestoreService,
+    format_restore_status,
 )
 from services.startup_check import StartupCheckQueue
 from ui.components.context_menu import ContextMenu
 from ui.components.status_bar import StatusBar
 from ui.dialogs import ask_yes_no, show_error
+from ui.dialogs.disk_space import confirm_insufficient_space
+from ui.dialogs.mirror_confirm import confirm_mirror
 from ui.layouts.main_layout import MainLayout
 from ui.layouts.sidebar import (
     KEY_MAIN,
@@ -40,7 +60,7 @@ from ui.views.profile.profile_paths import (
     ensure_directory,
     source_error,
 )
-from ui.views.settings_view import SettingsView
+from ui.views.settings import SettingsView
 from ui.window_geometry import (
     WindowGeometryTracker,
     apply_default_geometry,
@@ -54,12 +74,21 @@ logger = get_logger(__name__)
 
 _STARTUP_CHECK_DELAY_MS = 700
 
+# Термин для restore_point в UI.
+_RETURN_POINT_LABEL = "Точка возврата"
+
 
 class MainWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
 
         self.settings: AppSettings = load_settings()
+
+        try:
+            cleanup_unused_icons(self.settings)
+        except Exception as exc:
+            logger.debug("startup cleanup_unused_icons: %r", exc)
+
         apply_theme(self.settings.theme or THEME_DEFAULT)
 
         self.title(APP_TITLE)
@@ -70,6 +99,9 @@ class MainWindow(ctk.CTk):
         self._closing = False
 
         self.copy_service = CopyService(
+            scheduler=lambda fn: self.after(0, fn),
+        )
+        self.restore_service = RestoreService(
             scheduler=lambda fn: self.after(0, fn),
         )
         self.profile_actions = ProfileActionController(self)
@@ -92,6 +124,7 @@ class MainWindow(ctk.CTk):
 
         self.status_bar = StatusBar(self)
         self.status_bar.grid(row=1, column=0, sticky="ew")
+        self.status_bar.set_on_cancel(self.cancel_current)
 
         self._build_router()
 
@@ -108,6 +141,217 @@ class MainWindow(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self._geometry_tracker.start()
         self.after(_STARTUP_CHECK_DELAY_MS, self._run_startup_check)
+
+    # --- Публичный API: копирование с UI-обвязкой ---
+
+    def ensure_disk_space(
+        self,
+        source: str,
+        destination: str,
+        create_backup: bool,
+    ) -> bool:
+        check = check_disk_space(source, destination, create_backup)
+        if check is None:
+            return True
+        if check.ok:
+            return True
+
+        return confirm_insufficient_space(
+            self, check, self.is_parent_visible(),
+        )
+
+    def start_copy_with_ui(
+        self,
+        *,
+        source: str,
+        destination: str,
+        create_backup: bool,
+        hash_cache_enabled: bool,
+        mirror_mode: bool,
+        profile_name: str = "",
+        is_startup_check: bool = False,
+        on_progress: Callable[[CopyProgress], None],
+        on_done: Callable[[CopyResult], None],
+        on_error: Callable[[str], None],
+    ) -> bool:
+        """Запускает копирование с UI-обвязкой."""
+        if self.restore_service.is_running:
+            self.set_status("Восстановление уже выполняется")
+            return False
+
+        if mirror_mode:
+            try:
+                stats = scan_mirror_diff(source, destination)
+            except Exception as exc:
+                logger.warning("pre-scan mirror упал: %r", exc)
+                stats = None
+
+            if (
+                stats is not None
+                and stats.requires_confirmation
+                and not confirm_mirror(
+                    self,
+                    stats,
+                    self.is_parent_visible(),
+                    profile_name=profile_name,
+                    is_startup_check=is_startup_check,
+                )
+            ):
+                return False
+
+        def wrapped_done(result: CopyResult) -> None:
+            self.status_bar.show_cancel_button(False)
+
+            if not result.cancelled and result.errors == 0:
+                self._cleanup_states_for(destination)
+
+            on_done(result)
+            self.refresh_current_profile_view()
+
+        def wrapped_error(message: str) -> None:
+            self.status_bar.show_cancel_button(False)
+            on_error(message)
+
+        started = self.copy_service.start(
+            source=source,
+            destination=destination,
+            create_backup=create_backup,
+            on_progress=on_progress,
+            on_done=wrapped_done,
+            on_error=wrapped_error,
+            hash_cache_enabled=hash_cache_enabled,
+            mirror_mode=mirror_mode,
+        )
+        if started:
+            self.status_bar.show_cancel_button(True)
+        return started
+
+    def cancel_copy(self) -> None:
+        if not self.copy_service.is_running:
+            return
+        self.status_bar.show_cancel_button(False)
+        self.set_status_progress("Отмена…", None)
+        self.copy_service.cancel()
+
+    # --- Публичный API: восстановление с UI-обвязкой ---
+
+    def start_restore_with_ui(
+        self,
+        *,
+        backup_state_ref: str,
+        destination: str,
+        profile_name: str = "",
+        on_done: Callable[[RestoreResult], None],
+        on_error: Callable[[str], None] | None = None,
+    ) -> bool:
+        """Запускает восстановление к указанному state.
+
+        Перед изменениями destination автоматически создаётся
+        restore_point (точка возврата) — при неудаче restore
+        можно откатить.
+        """
+        if self.copy_service.is_running:
+            self.set_status("Копирование уже выполняется")
+            return False
+
+        def wrapped_done(result: RestoreResult) -> None:
+            self.status_bar.show_cancel_button(False)
+            self._show_restore_status(result, profile_name)
+            on_done(result)
+            self.refresh_current_profile_view()
+
+        def wrapped_error(message: str) -> None:
+            self.status_bar.show_cancel_button(False)
+            if on_error is not None:
+                on_error(message)
+                return
+            self.set_status_progress(
+                f"Ошибка восстановления: {message}", None,
+            )
+            show_error(
+                self,
+                "Ошибка восстановления",
+                message,
+                parent_visible=self.is_parent_visible(),
+            )
+
+        started = self.restore_service.start(
+            backup_state_ref=backup_state_ref,
+            destination=destination,
+            on_progress=self._on_restore_progress,
+            on_done=wrapped_done,
+            on_error=wrapped_error,
+        )
+        if started:
+            self.set_status_progress("Восстановление…", 0.0)
+            self.status_bar.show_cancel_button(True)
+        return started
+
+    def _on_restore_progress(
+        self, progress: RestoreProgress,
+    ) -> None:
+        self.set_status_progress(
+            f"Восстановление: "
+            f"{progress.processed}/{progress.total}",
+            progress.percent / 100.0,
+        )
+
+    def _show_restore_status(
+        self,
+        result: RestoreResult,
+        profile_name: str = "",
+    ) -> None:
+        text = format_restore_status(result)
+        if profile_name:
+            text = f"{profile_name}: {text}"
+        if result.restore_point_path:
+            point_name = Path(
+                result.restore_point_path,
+            ).name
+            text += f"  ·  {_RETURN_POINT_LABEL}: {point_name}"
+        self.set_status_progress(text, None)
+
+    def cancel_current(self) -> None:
+        """Отменяет текущую длительную операцию."""
+        if self.copy_service.is_running:
+            self.cancel_copy()
+            return
+        if self.restore_service.is_running:
+            self.cancel_restore()
+
+    def cancel_restore(self) -> None:
+        if not self.restore_service.is_running:
+            return
+        self.status_bar.show_cancel_button(False)
+        self.set_status_progress("Отмена…", None)
+        self.restore_service.cancel()
+
+    def _cleanup_states_for(self, destination: str) -> None:
+        s = self.settings
+        policy = CleanupPolicy(
+            keep_last_enabled=s.backup_keep_last_enabled,
+            keep_last_n=s.backup_keep_last_n,
+            delete_older_enabled=s.backup_delete_older_enabled,
+            delete_older_days=s.backup_delete_older_days,
+        )
+        if not policy.is_active:
+            return
+        try:
+            result = cleanup_states(destination, policy)
+            if result.deleted_count:
+                logger.info(
+                    "Очистка состояний для %s: удалено %d, "
+                    "blob-ов удалено %d, ошибок %d",
+                    destination,
+                    result.deleted_count,
+                    result.blobs_deleted,
+                    len(result.errors),
+                )
+        except Exception as exc:
+            logger.warning(
+                "cleanup_states для %s упал: %r",
+                destination, exc,
+            )
 
     # --- Иконка окна ---
 
@@ -198,9 +442,11 @@ class MainWindow(ctk.CTk):
             if key == KEY_MAIN:
                 self.active_profile_id = None
                 self.router.show("main")
+                self.layout.sidebar.clear_selection()
             elif key == KEY_SETTINGS:
                 self.active_profile_id = None
                 self.router.show("settings")
+                self.layout.sidebar.clear_selection()
             else:
                 pid = parse_profile_key(key)
                 if pid is None:
@@ -244,7 +490,7 @@ class MainWindow(ctk.CTk):
             logger.debug("state(): %r", exc)
             return True
 
-    # --- Публичное API ---
+    # --- Настройки ---
 
     def save_settings_now(self) -> None:
         try:
@@ -266,65 +512,43 @@ class MainWindow(ctk.CTk):
             except Exception as exc:
                 logger.debug("on_show MainView: %r", exc)
 
-    def reset_all_settings(self) -> None:
-        try:
-            if self.copy_service.is_running:
-                self.copy_service.cancel()
-
-            self.startup_checker.cancel()
-
-            self.settings = AppSettings()
-            apply_theme(self.settings.theme or THEME_DEFAULT)
-            save_settings(self.settings)
-
-            self.active_profile_id = None
-            self.layout.sidebar.set_active(KEY_MAIN)
-            self.refresh_sidebar()
-            self.router.show("main")
-            self.refresh_main_view()
-
-            view = self.router.get_view("settings")
-            if view is not None:
-                on_show = getattr(view, "on_show", None)
-                if callable(on_show):
-                    try:
-                        on_show()
-                    except Exception as exc:
-                        logger.debug(
-                            "on_show SettingsView: %r", exc,
-                        )
-
-            self.set_status(
-                "Настройки сброшены к значениям по умолчанию",
-            )
-            logger.info("Все настройки сброшены пользователем")
-        except Exception as exc:
-            logger.error("Ошибка сброса настроек: %r", exc)
-            self.set_status(f"Ошибка сброса: {exc}")
+    def refresh_current_profile_view(self) -> None:
+        """Обновляет текущий ProfileView (например, метку версии)."""
+        if self.active_profile_id is None:
+            return
+        view = self.router.get_view("profile")
+        if view is None:
+            return
+        on_show = getattr(view, "on_show", None)
+        if callable(on_show):
+            try:
+                on_show()
+            except Exception as exc:
+                logger.debug("on_show ProfileView: %r", exc)
 
     # --- Автопроверка при старте ---
 
     def _run_startup_check(self) -> None:
         if self._closing:
             return
-        self.startup_checker.start(self.settings.profiles)
+        self.startup_checker.start(
+            self.settings.profiles,
+            run_on_restored=self.settings.run_autocheck_on_restored,
+        )
 
     # --- Проверка + запуск (кнопка ▶) ---
 
     def run_with_check(self, pid: str) -> None:
-        """Копирует директорию и запускает приложение.
-
-        Используется кнопкой ▶ в сайдбаре и на плитке главной.
-        Соответствует тултипу «Проверить директорию и запустить
-        приложение»: сначала копирование, потом запуск. При
-        ошибках копирования запуск не выполняется.
-        """
         profile = self.profile_actions.find(pid)
         if profile is None:
             return
 
         if self.copy_service.is_running:
             self.set_status("Копирование уже выполняется")
+            return
+
+        if self.restore_service.is_running:
+            self.set_status("Восстановление уже выполняется")
             return
 
         src_err = source_error(profile.source)
@@ -360,21 +584,45 @@ class MainWindow(ctk.CTk):
             )
             return
 
+        if not self.ensure_disk_space(
+            profile.source, profile.destination,
+            profile.create_backup,
+        ):
+            return
+
         self.set_status_progress("Копирование…", 0.0)
 
-        started = self.copy_service.start(
+        started = self.start_copy_with_ui(
             source=profile.source,
             destination=profile.destination,
             create_backup=profile.create_backup,
+            hash_cache_enabled=self.settings.hash_cache_enabled,
+            mirror_mode=profile.mirror_mode,
+            profile_name=profile.display_name,
+            is_startup_check=False,
             on_progress=self._on_run_check_progress,
             on_done=lambda r, p=profile: self._on_run_check_done(r, p),
             on_error=self._on_run_check_error,
-            hash_cache_enabled=self.settings.hash_cache_enabled,
         )
         if not started:
             self.set_status("Не удалось запустить копирование")
 
     def _on_run_check_progress(self, progress) -> None:
+        if progress.phase == PHASE_SAVE_SCAN:
+            self.set_status_progress(
+                f"Сканирование: "
+                f"{progress.processed}/{progress.total}",
+                progress.percent / 100.0,
+            )
+            return
+        if progress.phase == PHASE_SAVE_STORE:
+            self.set_status_progress(
+                f"Сохранение в хранилище: "
+                f"{progress.processed}/{progress.total}",
+                progress.percent / 100.0,
+            )
+            return
+
         self.set_status_progress(
             f"Копирование: {progress.processed}/{progress.total}",
             progress.percent / 100.0,
@@ -389,12 +637,11 @@ class MainWindow(ctk.CTk):
             )
             return
 
+        copy_text = format_copy_status(result)
+        copy_text += self._mirror_suffix(result)
+
         if result.errors > 0:
-            self.set_status_progress(
-                f"Копирование с {result.errors} ошибками — "
-                f"запуск отменён",
-                None,
-            )
+            self.set_status_progress(copy_text, None)
             show_error(
                 self,
                 "Нельзя запустить приложение",
@@ -407,30 +654,21 @@ class MainWindow(ctk.CTk):
             )
             return
 
-        parts = [
-            f"скопировано {result.copied}",
-            f"пропущено {result.skipped}",
-        ]
-        self.set_status_progress(
-            "Копирование завершено: " + ", ".join(parts),
-            None,
-        )
-
         profile.touch()
         save_settings(self.settings)
 
+        if not profile.exe_relative:
+            self.set_status_progress(
+                f"{copy_text}  ·  Запускаемое приложение не указано",
+                None,
+            )
+            return
+
         full = profile.exe_full_path()
         if not full or not Path(full).is_file():
-            show_error(
-                self,
-                "Нельзя запустить приложение",
-                (
-                    "Файл приложения не найден:\n"
-                    f"{full or '—'}\n\n"
-                    "Убедитесь, что приложение было в исходной "
-                    "директории и успешно скопировано."
-                ),
-                parent_visible=self.is_parent_visible(),
+            self.set_status_progress(
+                f"{copy_text}  ·  Файл приложения не найден",
+                None,
             )
             return
 
@@ -438,6 +676,10 @@ class MainWindow(ctk.CTk):
         try:
             launch_exe(full)
         except LaunchError as exc:
+            self.set_status_progress(
+                f"{copy_text}  ·  Ошибка запуска",
+                None,
+            )
             show_error(
                 self,
                 "Ошибка запуска",
@@ -446,7 +688,24 @@ class MainWindow(ctk.CTk):
             )
             return
 
-        self.set_status(f"Запущено: {Path(full).name}")
+        self.set_status_progress(
+            f"{copy_text}  ·  Запущено: {Path(full).name}",
+            None,
+        )
+
+    @staticmethod
+    def _mirror_suffix(result: CopyResult) -> str:
+        if (
+            not result.mirror_removed_files
+            and not result.mirror_removed_dirs
+        ):
+            return ""
+        parts = []
+        if result.mirror_removed_files:
+            parts.append(f"файлов {result.mirror_removed_files}")
+        if result.mirror_removed_dirs:
+            parts.append(f"папок {result.mirror_removed_dirs}")
+        return f", убрано в бэкап: {', '.join(parts)}"
 
     def _on_run_check_error(self, message: str) -> None:
         self.set_status_progress(f"Ошибка: {message}", None)
@@ -457,38 +716,67 @@ class MainWindow(ctk.CTk):
             parent_visible=self.is_parent_visible(),
         )
 
-    # --- Действия с профилями: тонкие обёртки над контроллером ---
+    # --- Действия с профилями ---
 
     def _on_add_profile(self) -> None:
         self.profile_actions.add()
 
-    def _on_profile_context(self, pid: str, x: int, y: int) -> None:
-        profile = self.profile_actions.find(pid)
-        if profile is None:
+    def _on_profile_context(
+        self, pids: list[str], x: int, y: int,
+    ) -> None:
+        """ПКМ по профилю (или группе выделенных).
+
+        Если выделен один — полное меню действий.
+        Если несколько — только «Удалить N профилей».
+        """
+        if not pids:
             return
 
         menu = ContextMenu(self)
-        menu.add_item(
-            "Переименовать",
-            lambda: self.profile_actions.rename(pid),
-            icon="✏️",
-        )
-        menu.add_item(
-            "Сменить иконку",
-            lambda: self.profile_actions.change_icon(pid),
-            icon="🎨",
-        )
-        menu.add_separator()
-        menu.add_item(
-            "Удалить",
-            lambda: self.profile_actions.delete(pid),
-            icon="🗑",
-            danger=True,
-        )
+
+        if len(pids) == 1:
+            pid = pids[0]
+            if self.profile_actions.find(pid) is None:
+                return
+            menu.add_item(
+                "Переименовать",
+                lambda: self.profile_actions.rename(pid),
+                icon="✏️",
+            )
+            menu.add_item(
+                "Сменить иконку",
+                lambda: self.profile_actions.change_icon(pid),
+                icon="🎨",
+            )
+            menu.add_separator()
+            menu.add_item(
+                "Удалить",
+                lambda: self.profile_actions.delete_many([pid]),
+                icon="🗑",
+                danger=True,
+            )
+        else:
+            label = self._delete_many_label(len(pids))
+            menu.add_item(
+                label,
+                lambda: self.profile_actions.delete_many(pids),
+                icon="🗑",
+                danger=True,
+            )
+
         menu.show(x, y)
 
+    @staticmethod
+    def _delete_many_label(n: int) -> str:
+        if n % 10 == 1 and n % 100 != 11:
+            word = "профиль"
+        elif 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):
+            word = "профиля"
+        else:
+            word = "профилей"
+        return f"Удалить {n} {word}"
+
     def _on_run_profile(self, pid: str) -> None:
-        """Кнопка ▶ в сайдбаре: проверка + запуск."""
         self.run_with_check(pid)
 
     # --- Статус-бар ---
@@ -530,6 +818,8 @@ class MainWindow(ctk.CTk):
         try:
             if self.copy_service.is_running:
                 self.copy_service.cancel()
+            if self.restore_service.is_running:
+                self.restore_service.cancel()
             self._save_geometry()
             self.settings.last_view = (
                 self.router.current or KEY_MAIN

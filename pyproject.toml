@@ -1,7 +1,7 @@
 [project]
 name = "checkcopyrun"
 version = "0.0.0"   # source of truth: config/constants.py APP_VERSION
-description = "Add your description here"
+description = "Utility to check, copy & run application folders (Windows)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

@@ -8,11 +8,19 @@
 -transparentcolor (Windows).
 
 Показ: окно создаётся скрытым (withdraw), настраивается,
-позиционируется, затем deiconify. Это исключает «зависание»
-на первом показе, когда Toplevel не успевает отрисоваться.
+позиционируется, затем deiconify.
 
-Защита: у каждого окна автотаймаут 10 секунд. Если по какой-то
-причине <Leave> не дошёл — окно всё равно скроется.
+Скрытие:
+  • fast-path: <Leave> → проверка через 80 мс (мгновенно);
+  • safety: polling каждые 200 мс, пока тултип видим. Проверяет
+    позицию указателя через winfo_containing. Надёжнее таймаута:
+    скрывает, даже если <Leave> не пришёл (быстрая смена фокуса,
+    перетаскивание окна, quirks Tk). Polling не мешает показу,
+    пока указатель действительно на виджете или на самом
+    тултипе;
+  • глобальный трекер: показ нового тултипа скрывает предыдущий;
+  • <ButtonPress> на виджете;
+  • <Destroy> виджета.
 
 Публичное API:
     show()             — показать принудительно
@@ -54,14 +62,15 @@ _FRAME_PAD = 8
 _CURSOR_OFFSET = 12
 _SCREEN_MARGIN = 8
 
-# Задержка проверки «курсор всё ещё внутри»: если <Leave> пришёл
-# из-за перехода на дочерний виджет (например, с фрейма на лейбл),
-# подсказку не скрываем. Увеличена для стабильности после показа.
+# Задержка проверки «курсор всё ещё внутри» после <Leave>:
+# если <Leave> пришёл из-за перехода на дочерний виджет,
+# подсказку не скрываем.
 _LEAVE_CHECK_DELAY_MS = 80
 
-# Максимальное время показа. Защита от «зависания», если <Leave>
-# по какой-то причине не дошёл.
-_SHOW_TIMEOUT_MS = 10_000
+# Safety-polling: каждые N мс проверяем позицию указателя,
+# пока тултип видим. Это устраняет «зависание», если <Leave>
+# не дошёл или был отменён таймаут.
+_POLL_INTERVAL_MS = 200
 
 # Служебный цвет для прозрачных углов.
 _TRANSPARENT_COLOR = "#ff00fe"
@@ -136,7 +145,7 @@ class Tooltip:
         self._top: tk.Toplevel | None = None
         self._show_job: str | None = None
         self._leave_job: str | None = None
-        self._timeout_job: str | None = None
+        self._poll_job: str | None = None
 
         widget.bind("<Enter>", self._on_enter, add="+")
         widget.bind("<Leave>", self._on_leave, add="+")
@@ -210,20 +219,53 @@ class Tooltip:
         self._leave_job = None
         if self._widget is None:
             return
+        if self._is_pointer_inside():
+            return
+        self.hide()
 
+    # --- Polling (safety net) ---
+
+    def _schedule_poll(self) -> None:
+        if self._widget is None:
+            return
+        if self._top is None:
+            self._poll_job = None
+            return
+        self._cancel_poll_job()
+        try:
+            self._poll_job = self._widget.after(
+                _POLL_INTERVAL_MS, self._on_poll_tick,
+            )
+        except Exception as exc:
+            logger.debug("after() poll tooltip: %r", exc)
+
+    def _on_poll_tick(self) -> None:
+        self._poll_job = None
+        if self._widget is None or self._top is None:
+            return
+        if not self._is_pointer_inside():
+            logger.debug(
+                "poll: указатель вне — скрываю tooltip",
+            )
+            self.hide()
+            return
+        self._schedule_poll()
+
+    def _is_pointer_inside(self) -> bool:
+        """Указатель на виджете или на самом tooltip?"""
+        if self._widget is None:
+            return False
         try:
             under = self._widget.winfo_containing(
                 self._widget.winfo_pointerx(),
                 self._widget.winfo_pointery(),
             )
         except Exception as exc:
-            logger.debug("winfo_containing tooltip: %r", exc)
-            under = None
-
-        if under is not None and self._is_inside(under):
-            return
-
-        self.hide()
+            logger.debug("winfo_containing (poll): %r", exc)
+            return False
+        if under is None:
+            return False
+        return self._is_inside(under)
 
     def _is_inside(self, widget) -> bool:
         current = widget
@@ -242,6 +284,10 @@ class Tooltip:
 
         if self._top is not None:
             _register_active(self)
+            # Гарантируем, что polling активен (мог быть
+            # отменён между показами).
+            if self._poll_job is None:
+                self._schedule_poll()
             return
 
         text = self._resolve_text().strip()
@@ -255,7 +301,6 @@ class Tooltip:
             return
 
         # Создаём скрытым — показываем после полной настройки.
-        # Это исключает "зависание" на первом показе.
         try:
             top.withdraw()
         except Exception as exc:
@@ -308,20 +353,21 @@ class Tooltip:
 
         _register_active(self)
 
-        # Защитный таймаут: если <Leave> не сработал — скроем сами.
-        try:
-            self._timeout_job = self._widget.after(
-                _SHOW_TIMEOUT_MS, self.hide,
-            )
-        except Exception as exc:
-            logger.debug("after(таймаут) tooltip: %r", exc)
+        # Safety-polling: пока тултип видим — каждые 200 мс
+        # проверяем, что указатель всё ещё на виджете или на
+        # самом тултипе. Это заменяет прежний 10-секундный
+        # таймаут, который мог быть отменён в _on_enter и
+        # оставить тултип «зависшим».
+        self._schedule_poll()
 
     def _resolve_text(self) -> str:
         if callable(self._text):
             try:
                 return str(self._text())
             except Exception as exc:
-                logger.debug("callable текста tooltip упал: %r", exc)
+                logger.debug(
+                    "callable текста tooltip упал: %r", exc,
+                )
                 return ""
         return self._text or ""
 
@@ -370,7 +416,7 @@ class Tooltip:
             logger.debug("geometry tooltip: %r", exc)
 
     def _close_window(self) -> None:
-        self._cancel_timeout_job()
+        self._cancel_poll_job()
         if self._top is None:
             return
         top = self._top
@@ -400,16 +446,19 @@ class Tooltip:
             logger.debug("after_cancel leave tooltip: %r", exc)
         self._leave_job = None
 
-    def _cancel_timeout_job(self) -> None:
-        if self._timeout_job is None or self._widget is None:
+    def _cancel_poll_job(self) -> None:
+        if self._poll_job is None or self._widget is None:
             return
         try:
-            self._widget.after_cancel(self._timeout_job)
+            self._widget.after_cancel(self._poll_job)
         except Exception as exc:
-            logger.debug("after_cancel timeout tooltip: %r", exc)
-        self._timeout_job = None
+            logger.debug("after_cancel poll tooltip: %r", exc)
+        self._poll_job = None
 
     def _cancel_jobs(self) -> None:
         self._cancel_show_job()
         self._cancel_leave_job()
-        self._cancel_timeout_job()
+        # Polling НЕ отменяем: он управляется в _close_window и
+        # _schedule_poll. Если отменить здесь, то _do_show при
+        # early return (тултип уже виден) не запланирует его
+        # заново — и тултип «зависнет».

@@ -1,4 +1,12 @@
-"""Форма профиля: поля ввода, чекбоксы, кнопки действий."""
+"""Форма профиля: поля ввода, чекбоксы.
+
+Кнопки действий (Копировать / Запустить приложение / Резервные
+копии) находятся в ProfileView, не в форме — они привязаны к
+низу окна, не входят в прокручиваемую область.
+
+Чекбокс «Запускать приложение после копирования» неактивен,
+пока не выбрано запускаемое приложение.
+"""
 
 from __future__ import annotations
 
@@ -6,18 +14,15 @@ from collections.abc import Callable
 
 import customtkinter as ctk
 
-from ui.components.button import (
-    VARIANT_PRIMARY,
-    VARIANT_SECONDARY,
-    StyledButton,
-)
+from ui.components.button import VARIANT_SECONDARY, StyledButton
+from ui.components.wrapping_label import WrappingLabel
 from ui.fonts import get_font
 
 _LABEL_FONT_SIZE = 13
 _ENTRY_HEIGHT = 32
-_BROWSE_WIDTH = 180
-_ACTION_BUTTON_WIDTH = 220
-_BUTTON_GAP = 8
+_BROWSE_WIDTH = 110
+_HINT_FONT_SIZE = 11
+_HINT_HPADDING = 12
 
 
 class _PathRow(ctk.CTkFrame):
@@ -90,7 +95,7 @@ class _PathRow(ctk.CTkFrame):
 
 
 class ProfileForm(ctk.CTkFrame):
-    """Форма профиля. Кнопки — только через callbacks."""
+    """Форма профиля: поля и чекбоксы без кнопок действий."""
 
     def __init__(
         self,
@@ -104,8 +109,7 @@ class ProfileForm(ctk.CTkFrame):
         on_backup_toggle: Callable[[], None],
         on_run_after_toggle: Callable[[], None],
         on_check_on_startup_toggle: Callable[[], None],
-        on_copy: Callable[[], None],
-        on_run: Callable[[], None],
+        on_mirror_toggle: Callable[[], None],
     ):
         super().__init__(master, fg_color="transparent")
         self.grid_columnconfigure(0, weight=1)
@@ -147,37 +151,44 @@ class ProfileForm(ctk.CTkFrame):
         ).grid(row=3, column=0, sticky="w", pady=(16, 4))
 
         self._run_after_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
+        self._run_after_cb = ctk.CTkCheckBox(
             self,
             text="Запускать приложение после копирования",
             variable=self._run_after_var,
             command=on_run_after_toggle,
-        ).grid(row=4, column=0, sticky="w", pady=(4, 4))
+        )
+        self._run_after_cb.grid(
+            row=4, column=0, sticky="w", pady=(4, 4),
+        )
 
         self._check_on_startup_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             self,
-            text="Проверять директорию при запуске CCRun",
+            text="Проверять директорию при запуске CheckCopyRun",
             variable=self._check_on_startup_var,
             command=on_check_on_startup_toggle,
-        ).grid(row=5, column=0, sticky="w", pady=(4, 16))
+        ).grid(row=5, column=0, sticky="w", pady=(4, 8))
 
-        actions = ctk.CTkFrame(self, fg_color="transparent")
-        actions.grid(row=6, column=0, sticky="w")
+        self._mirror_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self,
+            text="Режим зеркала",
+            variable=self._mirror_var,
+            command=on_mirror_toggle,
+        ).grid(row=6, column=0, sticky="w", pady=(4, 4))
 
-        self._copy_btn = StyledButton(
-            actions, text="Копировать",
-            variant=VARIANT_PRIMARY, width=_ACTION_BUTTON_WIDTH,
-            command=on_copy,
-        )
-        self._copy_btn.pack(side="left", padx=(0, _BUTTON_GAP))
-
-        self._run_btn = StyledButton(
-            actions, text="Запустить приложение",
-            variant=VARIANT_SECONDARY, width=_ACTION_BUTTON_WIDTH,
-            command=on_run,
-        )
-        self._run_btn.pack(side="left")
+        WrappingLabel(
+            self,
+            text=(
+                "Файлы и папки, которых нет в папке источника, "
+                "будут убраны из папки. Резервные копии для "
+                "восстановления создаются принудительно, даже "
+                "если опция резервирования отключена."
+            ),
+            text_color=("gray40", "gray60"),
+            font=get_font(_HINT_FONT_SIZE),
+            h_padding=_HINT_HPADDING,
+        ).grid(row=7, column=0, sticky="ew", pady=(0, 16))
 
     # --- Свойства чекбоксов ---
 
@@ -193,7 +204,15 @@ class ProfileForm(ctk.CTkFrame):
     def check_on_startup(self) -> bool:
         return bool(self._check_on_startup_var.get())
 
+    @property
+    def mirror_mode(self) -> bool:
+        return bool(self._mirror_var.get())
+
     # --- Обновление ---
+
+    def set_create_backup(self, value: bool) -> None:
+        """Программно изменить чекбокс (без вызова command)."""
+        self._backup_var.set(bool(value))
 
     def update_values(
         self,
@@ -204,26 +223,25 @@ class ProfileForm(ctk.CTkFrame):
         create_backup: bool,
         run_after_copy: bool,
         check_on_startup: bool,
+        mirror_mode: bool,
     ) -> None:
         self._source_row.set_value(source)
         self._dest_row.set_value(destination)
         self._exe_row.set_value(exe_name)
         self._backup_var.set(create_backup)
-        self._run_after_var.set(run_after_copy)
         self._check_on_startup_var.set(check_on_startup)
+        self._mirror_var.set(mirror_mode)
+
+        has_exe = bool(exe_name)
+        if has_exe:
+            self._run_after_var.set(run_after_copy)
+            self._run_after_cb.configure(state="normal")
+        else:
+            self._run_after_var.set(False)
+            self._run_after_cb.configure(state="disabled")
 
     def update_open_buttons(
         self, *, source_enabled: bool, destination_enabled: bool,
     ) -> None:
         self._source_row.set_open_enabled(source_enabled)
         self._dest_row.set_open_enabled(destination_enabled)
-
-    def update_buttons_state(
-        self, *, copy_enabled: bool, run_enabled: bool,
-    ) -> None:
-        self._copy_btn.configure(
-            state="normal" if copy_enabled else "disabled",
-        )
-        self._run_btn.configure(
-            state="normal" if run_enabled else "disabled",
-        )

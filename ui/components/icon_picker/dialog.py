@@ -1,42 +1,23 @@
 """Диалог выбора иконки профиля.
 
-Возможности:
-- выбор эмодзи из палитры (без поля ввода);
-- выбор файла изображения (PNG, ICO, JPG, GIF, BMP);
-- ручное извлечение иконки из произвольного exe (в диалоге выбора
-  файла достаточно выбрать .exe — берём первую иконку);
-- автоматическое извлечение иконки из exe самого профиля — по
-  чекбоксу «Иконка приложения». Чекбокс активен, только если путь
-  exe задан в профиле.
-
-Приоритет пользователя выше авто: клик по эмодзи, по файлу или
-по exe (вручную) снимает чекбокс и сохраняет icon_auto=False.
-
-Превью эмодзи и превью файла/иконки exe — два независимых
-виджета. В каждый момент виден только один.
-
-Разделители — ui.components.separator.make_separator.
-Загрузка картинки — ui.components.image_utils.load_ctk_image.
-
-Возвращает (icon, icon_auto) или None при отмене.
+Тонкий tkinter-слой: строит виджеты, рендерит превью, обрабатывает
+клики. Вся логика выбора — в IconPickerState.
 """
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from tkinter import filedialog
 
 import customtkinter as ctk
 
 from config.constants import DEFAULT_PROFILE_ICON
-from core.settings_store import get_icons_dir
-from services.icon_extractor import save_exe_icon
 from ui.components.button import (
     VARIANT_PRIMARY,
     VARIANT_SECONDARY,
     StyledButton,
 )
+from ui.components.icon_picker.state import IconPickerState
 from ui.components.image_utils import load_ctk_image
 from ui.components.separator import make_separator
 from ui.dialogs import (
@@ -54,9 +35,7 @@ _IMAGE_EXTS = (".png", ".ico", ".jpg", ".jpeg", ".gif", ".bmp")
 
 _DIALOG_WIDTH = 540
 _PREVIEW_SIZE = 64
-
 _ACTION_BUTTON_WIDTH = 150
-
 _GRID_COLS = 8
 
 _EMOJI_PALETTE: list[str] = [
@@ -67,51 +46,20 @@ _EMOJI_PALETTE: list[str] = [
 ]
 
 
-def _looks_like_path(value: str) -> bool:
-    if not value:
-        return False
-    if "/" in value or "\\" in value:
-        return True
-    return value.lower().endswith(_IMAGE_EXTS)
-
-
 class _IconPickerDialog:
-    """Внутреннее состояние диалога и логика выбора."""
+    """Диалог выбора иконки. Логика — в IconPickerState."""
 
     def __init__(
         self,
         parent,
-        current_icon: str,
-        current_icon_auto: bool,
-        exe_path: Path | None,
+        state: IconPickerState,
         parent_visible: bool,
     ):
         self._parent = parent
         self._parent_visible = parent_visible
-        self._exe_path = exe_path
+        self._state = state
 
         self._result: tuple[str, bool] | None = None
-
-        if current_icon_auto and exe_path is not None:
-            existing = self._lookup_cached_exe_png(exe_path)
-            if existing is not None:
-                self._selected_kind = "auto"
-                self._selected_value = str(existing)
-            else:
-                self._selected_kind = "emoji"
-                self._selected_value = (
-                    current_icon if not _looks_like_path(current_icon)
-                    else DEFAULT_PROFILE_ICON
-                )
-        elif _looks_like_path(current_icon):
-            self._selected_kind = "file"
-            self._selected_value = current_icon
-        elif current_icon:
-            self._selected_kind = "emoji"
-            self._selected_value = current_icon
-        else:
-            self._selected_kind = "emoji"
-            self._selected_value = DEFAULT_PROFILE_ICON
 
         self._build()
         self._refresh_all()
@@ -169,6 +117,7 @@ class _IconPickerDialog:
 
         row += 1
 
+        # Палитра эмодзи.
         grid_frame = ctk.CTkFrame(
             self._dialog, fg_color="transparent",
         )
@@ -198,6 +147,7 @@ class _IconPickerDialog:
 
         row = self._add_separator(row)
 
+        # Чекбокс auto.
         self._auto_var = ctk.BooleanVar(value=False)
         self._auto_checkbox = ctk.CTkCheckBox(
             self._dialog,
@@ -228,6 +178,7 @@ class _IconPickerDialog:
 
         row = self._add_separator(row)
 
+        # Кнопка выбора другого файла.
         file_row = ctk.CTkFrame(
             self._dialog, fg_color="transparent",
         )
@@ -243,6 +194,7 @@ class _IconPickerDialog:
 
         row = self._add_separator(row)
 
+        # OK / Отмена.
         btns = ctk.CTkFrame(self._dialog, fg_color="transparent")
         btns.grid(row=row, column=0, pady=(4, 20))
 
@@ -264,7 +216,8 @@ class _IconPickerDialog:
         self._dialog.bind("<Escape>", lambda _e: self._on_cancel())
         self._dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
-        if self._exe_path is None:
+        # Активность чекбокса и подсказка под ним.
+        if not self._state.auto_available:
             self._auto_checkbox.configure(state="disabled")
             self._auto_hint.configure(
                 text=(
@@ -273,8 +226,10 @@ class _IconPickerDialog:
                 ),
             )
         else:
+            exe_path = self._state.exe_path
+            assert exe_path is not None
             self._auto_hint.configure(
-                text=f"Источник: {self._exe_path.name}",
+                text=f"Источник: {exe_path.name}",
             )
 
     def _add_separator(self, row: int) -> int:
@@ -285,11 +240,10 @@ class _IconPickerDialog:
         )
         return row + 1
 
-    # --- Выбор ---
+    # --- Действия ---
 
     def _select_emoji(self, emoji: str) -> None:
-        self._selected_kind = "emoji"
-        self._selected_value = emoji
+        self._state.select_emoji(emoji)
         self._auto_var.set(False)
         self._refresh_all()
 
@@ -321,65 +275,44 @@ class _IconPickerDialog:
         p = Path(path)
 
         if p.suffix.lower() == ".exe":
-            png = save_exe_icon(p, get_icons_dir())
-            if png is None:
+            ok, error = self._state.select_file_from_exe(p)
+            if not ok:
                 show_error(
                     self._dialog,
                     "Иконка не извлечена",
-                    (
-                        f"Не удалось извлечь иконку из файла:\n"
-                        f"{p.name}"
-                    ),
+                    error,
                     parent_visible=self._parent_visible,
                 )
                 return
-            self._selected_kind = "file"
-            self._selected_value = str(png)
         else:
-            self._selected_kind = "file"
-            self._selected_value = str(p.resolve())
+            self._state.select_file_as_image(str(p))
 
         self._auto_var.set(False)
         self._refresh_all()
 
     def _on_auto_toggle(self) -> None:
         if not self._auto_var.get():
-            if self._selected_kind == "auto":
-                self._selected_kind = "emoji"
-                self._selected_value = DEFAULT_PROFILE_ICON
+            self._state.disable_auto()
             self._refresh_all()
             return
 
-        if self._exe_path is None:
-            self._auto_var.set(False)
-            return
-
-        png = save_exe_icon(self._exe_path, get_icons_dir())
-        if png is None:
+        ok, error = self._state.try_enable_auto()
+        if not ok:
             self._auto_hint.configure(
-                text="Не удалось извлечь иконку из exe.",
+                text=error,
                 text_color=("#a33030", "#e88080"),
             )
             self._auto_var.set(False)
             self._refresh_all()
             return
 
-        self._selected_kind = "auto"
-        self._selected_value = str(png)
+        exe_path = self._state.exe_path
+        exe_name = exe_path.name if exe_path is not None else "—"
         self._auto_hint.configure(
-            text=f"Иконка взята из: {self._exe_path.name}",
+            text=f"Иконка взята из: {exe_name}",
             text_color=("gray40", "gray60"),
         )
         self._refresh_all()
-
-    def _lookup_cached_exe_png(self, exe_path: Path) -> Path | None:
-        digest = hashlib.sha1(
-            str(exe_path.resolve()).encode("utf-8"),
-        ).hexdigest()[:16]
-        candidate = get_icons_dir() / f"exe_{digest}.png"
-        if candidate.is_file():
-            return candidate
-        return None
 
     # --- Обновление вида ---
 
@@ -389,11 +322,14 @@ class _IconPickerDialog:
         self._refresh_auto_checkbox()
 
     def _refresh_preview(self) -> None:
-        if self._selected_kind == "emoji":
-            self._show_emoji_preview(self._selected_value)
+        kind = self._state.selected_kind
+        value = self._state.selected_value
+
+        if kind == "emoji":
+            self._show_emoji_preview(value)
             return
 
-        img = load_ctk_image(self._selected_value, _PREVIEW_SIZE)
+        img = load_ctk_image(value, _PREVIEW_SIZE)
         if img is not None:
             self._show_image_preview(img)
             return
@@ -405,7 +341,9 @@ class _IconPickerDialog:
         self._image_ctk = None
 
         self._emoji_preview.configure(text=text)
-        self._emoji_preview.place(relx=0.5, rely=0.5, anchor="center")
+        self._emoji_preview.place(
+            relx=0.5, rely=0.5, anchor="center",
+        )
         self._emoji_preview.lift()
 
     def _show_image_preview(self, img) -> None:
@@ -413,13 +351,15 @@ class _IconPickerDialog:
 
         self._image_ctk = img
         self._image_preview.configure(image=img, text="")
-        self._image_preview.place(relx=0.5, rely=0.5, anchor="center")
+        self._image_preview.place(
+            relx=0.5, rely=0.5, anchor="center",
+        )
         self._image_preview.lift()
 
     def _refresh_grid_highlight(self) -> None:
         active = (
-            self._selected_value
-            if self._selected_kind == "emoji"
+            self._state.selected_value
+            if self._state.selected_kind == "emoji"
             else None
         )
         for emoji, btn in self._emoji_buttons.items():
@@ -434,20 +374,14 @@ class _IconPickerDialog:
                 )
 
     def _refresh_auto_checkbox(self) -> None:
-        if self._exe_path is None:
+        if not self._state.auto_available:
             return
-        self._auto_var.set(self._selected_kind == "auto")
+        self._auto_var.set(self._state.is_auto)
 
     # --- Завершение ---
 
     def _on_ok(self) -> None:
-        if self._selected_kind == "auto":
-            self._result = (self._selected_value, True)
-        else:
-            self._result = (
-                self._selected_value or DEFAULT_PROFILE_ICON,
-                False,
-            )
+        self._result = self._state.build_result()
         self._dialog.destroy()
 
     def _on_cancel(self) -> None:
@@ -464,15 +398,15 @@ def pick_icon(
 ) -> tuple[str, bool] | None:
     """Диалог выбора иконки профиля.
 
-    exe_path — путь к exe профиля. Если None — чекбокс «Иконка
-    приложения» недоступен.
-
     Возвращает (icon, icon_auto) или None при отмене.
     """
-    return _IconPickerDialog(
-        parent=parent,
+    state = IconPickerState(
         current_icon=current_icon,
         current_icon_auto=current_icon_auto,
         exe_path=exe_path,
+    )
+    return _IconPickerDialog(
+        parent=parent,
+        state=state,
         parent_visible=parent_visible,
     ).run()

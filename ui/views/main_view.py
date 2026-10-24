@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import customtkinter as ctk
 
 from core.models import Profile
 from core.settings_store import save_settings
-from services.copy_service import CopyResult, format_cancel_status
 from ui.components.profile_tile import ProfileTile
 from ui.components.scrollable import AutoHideScrollableFrame
 from ui.components.separator import make_separator
 from ui.fonts import get_font
 from ui.views.base_view import BaseView
-from ui.views.profile.profile_paths import ensure_directory
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -41,7 +37,8 @@ _INSTRUCTION_LINES = [
     "2.  Выберите, что копировать, куда копировать "
     "и что запустить после копирования.",
     "3.  Установите необходимые опции для профиля.",
-    "4.  Нажмите «Копировать», а затем «Запустить приложение».",
+    "4.  Нажмите «Запустить» на плитке профиля "
+    "или на кнопке ▶ в боковом меню.",
 ]
 
 
@@ -164,7 +161,6 @@ class MainView(BaseView):
                 self._scroll,
                 profile,
                 on_open=self._on_open_profile,
-                on_copy=self._on_copy,
                 on_run=self._on_run,
                 on_toggle_pin=self._on_toggle_pin,
             )
@@ -235,92 +231,13 @@ class MainView(BaseView):
         save_settings(self.window.settings)
         self._rebuild_tiles()
 
-        state = "закреплён" if profile.pinned else "откреплён"
+        state = (
+            "добавлен в избранное" if profile.pinned
+            else "удалён из избранного"
+        )
         self.window.set_status(
             f"Профиль {state}: {profile.display_name}",
         )
 
-    # --- Копирование (кнопка 📋) ---
-
-    def _on_copy(self, pid: str) -> None:
-        profile = self._find(pid)
-        if profile is None:
-            return
-
-        if not profile.can_copy():
-            self.window.set_status(
-                f"Профиль «{profile.display_name}» не настроен",
-            )
-            return
-
-        if self.window.copy_service.is_running:
-            self.window.set_status("Копирование уже выполняется")
-            return
-
-        if not ensure_directory(profile.destination):
-            self.window.set_status(
-                "Не удалось создать целевую директорию",
-            )
-            return
-
-        self.window.set_status_progress("Копирование…", 0.0)
-
-        started = self.window.copy_service.start(
-            source=profile.source,
-            destination=profile.destination,
-            create_backup=profile.create_backup,
-            on_progress=self._on_copy_progress,
-            on_done=lambda r, p=profile: self._on_copy_done(r, p),
-            on_error=self._on_copy_error,
-            hash_cache_enabled=(
-                self.window.settings.hash_cache_enabled
-            ),
-        )
-        if not started:
-            self.window.set_status("Не удалось запустить копирование")
-
-    def _on_copy_progress(self, progress) -> None:
-        self.window.set_status_progress(
-            f"Копирование: {progress.processed}/{progress.total}",
-            progress.percent / 100.0,
-        )
-
-    def _on_copy_done(
-        self, result: CopyResult, profile: Profile,
-    ) -> None:
-        if result.cancelled:
-            self.window.set_status_progress(
-                format_cancel_status(result), None,
-            )
-            return
-
-        parts = [
-            f"скопировано {result.copied}",
-            f"пропущено {result.skipped}",
-        ]
-        if result.errors:
-            parts.append(f"ошибок {result.errors}")
-        text = "Копирование завершено: " + ", ".join(parts)
-        self.window.set_status_progress(text, None)
-
-        if result.backup_dir:
-            self.window.set_status(
-                f"{text}  ·  бэкап: {Path(result.backup_dir).name}",
-            )
-
-        profile.touch()
-        save_settings(self.window.settings)
-
-        if profile.run_after_copy and result.errors == 0:
-            self.window.run_with_check(profile.id)
-
-    def _on_copy_error(self, message: str) -> None:
-        self.window.set_status_progress(
-            f"Ошибка копирования: {message}", None,
-        )
-
-    # --- Запуск (кнопка ▶) ---
-
     def _on_run(self, pid: str) -> None:
-        """Кнопка ▶ на плитке: проверка + запуск."""
         self.window.run_with_check(pid)

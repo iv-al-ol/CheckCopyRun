@@ -17,7 +17,7 @@ class MainLayout(ctk.CTkFrame):
         on_select: Callable[[str], None],
         on_add_profile: Callable[[], None],
         on_run_profile: Callable[[str], None],
-        on_profile_context: Callable[[str, int, int], None],
+        on_profile_context: Callable[[list[str], int, int], None],
     ):
         super().__init__(master, corner_radius=0, fg_color="transparent")
         self.grid_rowconfigure(0, weight=1)

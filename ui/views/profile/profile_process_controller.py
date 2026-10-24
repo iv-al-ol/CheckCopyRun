@@ -1,15 +1,4 @@
-"""Контроллер копирования и запуска для ProfileView.
-
-Перед копированием destination пересоздаётся, если его нет на
-диске (путь при этом должен быть задан). Source пересоздавать
-бессмысленно — данные потеряны, показываем ошибку.
-
-View передаёт три callback:
-  • get_profile()    — получить текущий профиль (или None);
-  • on_busy_change() — изменить состояние «занято» и перерисовать
-                        кнопки;
-  • on_reload()      — перерисовать форму после завершения.
-"""
+"""Контроллер копирования и запуска для ProfileView."""
 
 from __future__ import annotations
 
@@ -18,7 +7,12 @@ from pathlib import Path
 
 from core.models import Profile
 from core.settings_store import save_settings
-from services.copy_service import CopyResult, format_cancel_status
+from services.copy_service import (
+    PHASE_SAVE_SCAN,
+    PHASE_SAVE_STORE,
+    CopyResult,
+    format_copy_status,
+)
 from services.launcher import LaunchError, launch_exe
 from ui.dialogs import show_error
 from ui.views.profile.profile_paths import (
@@ -54,16 +48,12 @@ class ProfileProcessController:
         if profile is None:
             return
 
-        # 1. Source должен существовать. Пересоздавать бессмысленно:
-        #    пустая исходная папка означает «нечего копировать».
         src_err = source_error(profile.source)
         if src_err is not None:
             self._show_copy_blocked(src_err)
             self._on_reload()
             return
 
-        # 2. Destination должен быть задан. Если папки нет на диске
-        #    — пересоздаём.
         if not profile.destination:
             self._show_copy_blocked("Целевая директория не задана.")
             self._on_reload()
@@ -78,7 +68,6 @@ class ProfileProcessController:
             self._on_reload()
             return
 
-        # 3. Конфликт путей.
         conflict = path_conflict_error(
             profile.source, profile.destination,
         )
@@ -89,25 +78,48 @@ class ProfileProcessController:
             )
             return
 
-        # 4. Старт.
+        if not self._window.ensure_disk_space(
+            profile.source, profile.destination,
+            profile.create_backup,
+        ):
+            return
+
         self._on_busy_change(True)
         self._window.set_status_progress("Копирование…", 0.0)
 
-        started = self._window.copy_service.start(
+        started = self._window.start_copy_with_ui(
             source=profile.source,
             destination=profile.destination,
             create_backup=profile.create_backup,
-            on_progress=self._on_copy_progress,
-            on_done=lambda r, p=profile: self._on_copy_done(r, p),
-            on_error=self._on_copy_error,
             hash_cache_enabled=(
                 self._window.settings.hash_cache_enabled
             ),
+            mirror_mode=profile.mirror_mode,
+            profile_name=profile.display_name,
+            is_startup_check=False,
+            on_progress=self._on_copy_progress,
+            on_done=lambda r, p=profile: self._on_copy_done(r, p),
+            on_error=self._on_copy_error,
         )
         if not started:
             self._on_busy_change(False)
 
     def _on_copy_progress(self, progress) -> None:
+        if progress.phase == PHASE_SAVE_SCAN:
+            self._window.set_status_progress(
+                f"Сканирование: "
+                f"{progress.processed}/{progress.total}",
+                progress.percent / 100.0,
+            )
+            return
+        if progress.phase == PHASE_SAVE_STORE:
+            self._window.set_status_progress(
+                f"Сохранение в хранилище: "
+                f"{progress.processed}/{progress.total}",
+                progress.percent / 100.0,
+            )
+            return
+
         self._window.set_status_progress(
             f"Копирование: {progress.processed}/{progress.total}",
             progress.percent / 100.0,
@@ -118,25 +130,12 @@ class ProfileProcessController:
     ) -> None:
         self._on_busy_change(False)
 
-        if result.cancelled:
-            self._window.set_status_progress(
-                format_cancel_status(result), None,
-            )
-            return
-
-        parts = [
-            f"скопировано {result.copied}",
-            f"пропущено {result.skipped}",
-        ]
-        if result.errors:
-            parts.append(f"ошибок {result.errors}")
-        text = "Копирование завершено: " + ", ".join(parts)
+        text = format_copy_status(result)
+        text += self._mirror_suffix(result)
         self._window.set_status_progress(text, None)
 
-        if result.backup_dir:
-            self._window.set_status(
-                f"{text}  ·  бэкап: {Path(result.backup_dir).name}",
-            )
+        if result.cancelled:
+            return
 
         profile.touch()
         save_settings(self._window.settings)
@@ -144,6 +143,20 @@ class ProfileProcessController:
 
         if profile.run_after_copy and result.errors == 0:
             self.run()
+
+    @staticmethod
+    def _mirror_suffix(result: CopyResult) -> str:
+        if (
+            not result.mirror_removed_files
+            and not result.mirror_removed_dirs
+        ):
+            return ""
+        parts = []
+        if result.mirror_removed_files:
+            parts.append(f"файлов {result.mirror_removed_files}")
+        if result.mirror_removed_dirs:
+            parts.append(f"папок {result.mirror_removed_dirs}")
+        return f", убрано в бэкап: {', '.join(parts)}"
 
     def _on_copy_error(self, message: str) -> None:
         self._on_busy_change(False)

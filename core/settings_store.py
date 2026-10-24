@@ -34,8 +34,10 @@ _PROFILE_FIELDS = {
     "destination",
     "exe_relative",
     "create_backup",
+    "create_backup_warned",
     "run_after_copy",
     "check_on_startup",
+    "mirror_mode",
     "pinned",
     "last_used_at",
 }
@@ -65,7 +67,9 @@ def load_settings() -> AppSettings:
         decrypted = unprotect(raw)
         data = json.loads(decrypted.decode("utf-8"))
     except (DpapiError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        logger.error("settings.dat не расшифрован/не разобран: %r", exc)
+        logger.error(
+            "settings.dat не расшифрован/не разобран: %r", exc,
+        )
         return AppSettings()
 
     try:
@@ -84,7 +88,9 @@ def save_settings(settings: AppSettings) -> None:
         ).encode("utf-8")
         encrypted = protect(payload)
     except Exception as exc:
-        logger.error("Не удалось подготовить settings.dat: %r", exc)
+        logger.error(
+            "Не удалось подготовить settings.dat: %r", exc,
+        )
         return
 
     fd, tmp_name = tempfile.mkstemp(
@@ -94,9 +100,13 @@ def save_settings(settings: AppSettings) -> None:
         with os.fdopen(fd, "wb") as f:
             f.write(encrypted)
         os.replace(tmp_name, path)
-        logger.debug("settings.dat сохранён (%d байт)", len(encrypted))
+        logger.debug(
+            "settings.dat сохранён (%d байт)", len(encrypted),
+        )
     except Exception as exc:
-        logger.error("Не удалось записать settings.dat: %r", exc)
+        logger.error(
+            "Не удалось записать settings.dat: %r", exc,
+        )
         try:
             os.unlink(tmp_name)
         except OSError as cleanup_exc:
@@ -116,6 +126,13 @@ def _to_dict(s: AppSettings) -> dict:
         "window_geometry": s.window_geometry,
         "last_view": s.last_view,
         "hash_cache_enabled": s.hash_cache_enabled,
+        "run_autocheck_on_restored": s.run_autocheck_on_restored,
+        "backup_keep_last_enabled": s.backup_keep_last_enabled,
+        "backup_keep_last_n": s.backup_keep_last_n,
+        "backup_delete_older_enabled": (
+            s.backup_delete_older_enabled
+        ),
+        "backup_delete_older_days": s.backup_delete_older_days,
         "profiles": [asdict(p) for p in s.profiles],
     }
 
@@ -123,8 +140,18 @@ def _to_dict(s: AppSettings) -> dict:
 def _from_dict(data: dict) -> AppSettings:
     profiles: list[Profile] = []
     for raw in data.get("profiles", []):
-        clean = {k: v for k, v in raw.items() if k in _PROFILE_FIELDS}
+        clean = {
+            k: v for k, v in raw.items()
+            if k in _PROFILE_FIELDS
+        }
         profiles.append(Profile(**clean))
+
+    def _int(value, default: int, min_v: int = 1) -> int:
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(min_v, n)
 
     return AppSettings(
         version=data.get("version", SETTINGS_VERSION),
@@ -137,6 +164,21 @@ def _from_dict(data: dict) -> AppSettings:
                 "hash_cache_enabled",
                 HASH_CACHE_ENABLED_DEFAULT,
             )
+        ),
+        run_autocheck_on_restored=bool(
+            data.get("run_autocheck_on_restored", False)
+        ),
+        backup_keep_last_enabled=bool(
+            data.get("backup_keep_last_enabled", False)
+        ),
+        backup_keep_last_n=_int(
+            data.get("backup_keep_last_n", 10), 10,
+        ),
+        backup_delete_older_enabled=bool(
+            data.get("backup_delete_older_enabled", False)
+        ),
+        backup_delete_older_days=_int(
+            data.get("backup_delete_older_days", 30), 30,
         ),
         profiles=profiles,
     )

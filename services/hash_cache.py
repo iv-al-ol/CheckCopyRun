@@ -8,6 +8,9 @@ stat без чтения, если ничего не менялось.
 Файл кэша: <destination>/!CCRun/hashes.json. Атомарная запись
 (tmp + os.replace). При отсутствии/повреждении/несовпадении
 версии или алгоритма — молча стартует с пустым кэшем.
+
+При enabled=False — все публичные методы no-op: put не пополняет
+_entries, save не пишет файл, load не читает.
 """
 
 from __future__ import annotations
@@ -189,6 +192,8 @@ class HashCache:
                 )
 
     def get(self, rel_path: str) -> CacheEntry | None:
+        if not self._enabled:
+            return None
         return self._entries.get(rel_path)
 
     def put(
@@ -200,6 +205,8 @@ class HashCache:
         dst_mtime_ns: int,
         sha256: str,
     ) -> None:
+        if not self._enabled:
+            return
         self._entries[rel_path] = CacheEntry(
             size=size,
             src_mtime_ns=src_mtime_ns,
@@ -215,6 +222,8 @@ class HashCache:
         src_mtime_ns: int | None = None,
         dst_mtime_ns: int | None = None,
     ) -> None:
+        if not self._enabled:
+            return
         e = self._entries.get(rel_path)
         if e is None:
             return
@@ -225,14 +234,20 @@ class HashCache:
         self._dirty = True
 
     def remove(self, rel_path: str) -> None:
+        if not self._enabled:
+            return
         if rel_path in self._entries:
             del self._entries[rel_path]
             self._dirty = True
 
     def paths(self) -> list[str]:
+        if not self._enabled:
+            return []
         return list(self._entries.keys())
 
     def clear(self) -> None:
+        if not self._enabled:
+            return
         if self._entries:
             self._entries.clear()
             self._dirty = True

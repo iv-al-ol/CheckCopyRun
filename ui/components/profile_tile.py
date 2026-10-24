@@ -1,4 +1,13 @@
-"""Плитка профиля для главного экрана."""
+"""Плитка профиля для главного экрана.
+
+Действия: Запустить и Закрепить/Открепить.
+  • Запустить доступно, если заданы source и destination.
+  • Закрепить: ★ (BLACK STAR, U+2605) — закреплён, золотая;
+              ☆ (WHITE STAR, U+2606) — откреплён, обычный цвет.
+
+Используются классические текстовые символы звёзд, а не emoji ⭐
+(U+2B50): emoji может рендериться как пустая звезда в fallback-шрифте.
+"""
 
 from __future__ import annotations
 
@@ -48,19 +57,25 @@ _BUTTON_PADX = 4
 _BUTTON_RADIUS = 6
 _BUTTON_FONT_SIZE = 14
 
-_TOOLTIP_COPY = "Копировать"
-_TOOLTIP_RUN = "Проверить директорию и запустить приложение"
-_TOOLTIP_PIN = "Закрепить"
-_TOOLTIP_UNPIN = "Открепить"
+_TOOLTIP_RUN = "Запустить"
+_TOOLTIP_PINNED = "Добавлено в избранное"
+_TOOLTIP_UNPINNED = "Добавить в избранное"
 _TOOLTIP_DELAY_MS = 400
 
-_ICON_COPY = "📋"
 _ICON_RUN = "▶"
-_ICON_PIN = "📌"
+
+# Звёзды: классические текстовые символы (не emoji).
+# ★ U+2605 BLACK STAR — заполненная, ☆ U+2606 WHITE STAR — контурная.
+_ICON_PIN_ON = "★"
+_ICON_PIN_OFF = "☆"
+
+# Цвета текста звёзд: золотой для закреплённой, обычный для откреплённой.
+_PIN_ON_TEXT_COLOR = ("#b8860b", "#ffd700")   # darkgoldenrod / gold
+_PIN_OFF_TEXT_COLOR = ACCENT_TEXT              # белый на синем фоне
 
 
 class ProfileTile(ctk.CTkFrame):
-    """Плитка профиля с тремя действиями."""
+    """Плитка профиля с двумя действиями."""
 
     def __init__(
         self,
@@ -68,7 +83,6 @@ class ProfileTile(ctk.CTkFrame):
         profile: Profile,
         *,
         on_open: Callable[[str], None],
-        on_copy: Callable[[str], None],
         on_run: Callable[[str], None],
         on_toggle_pin: Callable[[str], None],
     ):
@@ -83,7 +97,6 @@ class ProfileTile(ctk.CTkFrame):
 
         self._profile = profile
         self._on_open = on_open
-        self._on_copy = on_copy
         self._on_run = on_run
         self._on_toggle_pin = on_toggle_pin
 
@@ -174,17 +187,7 @@ class ProfileTile(ctk.CTkFrame):
             pady=_TILE_PADY_TOP_BOTTOM,
         )
 
-        self._copy_btn = self._icon_button(
-            actions,
-            icon=_ICON_COPY,
-            tooltip=_TOOLTIP_COPY,
-            command=lambda: self._on_copy(self._profile.id),
-            enabled=self._profile.can_copy(),
-        )
-        self._copy_btn.pack(side="left", padx=(0, _BUTTON_PADX))
-
-        # Кнопка запуска: клик = копирование + запуск. Доступна,
-        # если source/destination заданы (exe появится после копирования).
+        # Запустить — зелёная.
         self._run_btn = self._icon_button(
             actions,
             icon=_ICON_RUN,
@@ -197,22 +200,26 @@ class ProfileTile(ctk.CTkFrame):
         )
         self._run_btn.pack(side="left", padx=(0, _BUTTON_PADX))
 
+        # Закрепить/Открепить — синяя.
+        # ★ золотая (закреплён) / ☆ белая (откреплён).
+        pinned = self._profile.pinned
+        pin_icon = _ICON_PIN_ON if pinned else _ICON_PIN_OFF
         pin_tooltip = (
-            _TOOLTIP_UNPIN if self._profile.pinned else _TOOLTIP_PIN
+            _TOOLTIP_PINNED if pinned else _TOOLTIP_UNPINNED
+        )
+        pin_text_color = (
+            _PIN_ON_TEXT_COLOR if pinned else _PIN_OFF_TEXT_COLOR
         )
         self._pin_btn = self._icon_button(
             actions,
-            icon=_ICON_PIN,
+            icon=pin_icon,
             tooltip=pin_tooltip,
             command=lambda: self._on_toggle_pin(self._profile.id),
             enabled=True,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            text_color=pin_text_color,
         )
-        if self._profile.pinned:
-            self._pin_btn.configure(
-                fg_color=ACCENT,
-                hover_color=ACCENT_HOVER,
-                text_color=ACCENT_TEXT,
-            )
         self._pin_btn.pack(side="left")
 
     def _icon_button(

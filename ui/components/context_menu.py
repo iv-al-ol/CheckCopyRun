@@ -11,10 +11,16 @@
 Разделитель — ui.components.separator.make_separator.
 
 Меню закрывается по:
-- клику вне меню,
-- потере фокуса приложения,
-- Escape,
+- клику ЛКМ вне меню;
+- клику ПКМ вне меню;
+- потере фокуса приложением;
+- Escape;
 - выбору пункта.
+
+Сам правый клик, открывший меню, не должен его закрывать:
+bind Button-3 откладывается через after_idle, чтобы попасть
+в следующий цикл событий (текущее событие ещё обрабатывается,
+когда меню только создаётся).
 """
 
 from __future__ import annotations
@@ -167,7 +173,9 @@ class _MenuRow(ctk.CTkFrame):
         try:
             self._command()
         except Exception as exc:
-            logger.error("Ошибка команды контекстного меню: %r", exc)
+            logger.error(
+                "Ошибка команды контекстного меню: %r", exc,
+            )
 
     def _on_enter(self, _event=None) -> None:
         if not self._hover:
@@ -226,6 +234,10 @@ class ContextMenu:
 
         self._click_bind_id: str | None = None
         self._focus_bind_id: str | None = None
+
+        # Button-3: отложенный bind (см. _bind_close).
+        self._rclick_bind_id: str | None = None
+        self._rclick_bind: str | None = None
 
     # --- Сборка ---
 
@@ -346,7 +358,9 @@ class ContextMenu:
         try:
             callback()
         except Exception as exc:
-            logger.error("Ошибка пункта контекстного меню: %r", exc)
+            logger.error(
+                "Ошибка пункта контекстного меню: %r", exc,
+            )
 
     def _clamp_to_screen(
         self, x: int, y: int, w: int, h: int, margin: int,
@@ -373,6 +387,20 @@ class ContextMenu:
             logger.debug("bind Button-1: %r", exc)
             self._click_bind_id = None
 
+        # Button-3: сам правый клик, открывший меню, ещё
+        # обрабатывается (bindtags: widget → class → toplevel).
+        # Если забиндить Button-3 синхронно, он попадёт в
+        # toplevel-обработчик того же события и закроет только
+        # что созданное меню. after_idle гарантирует, что bind
+        # вступит в силу уже после завершения текущего события.
+        try:
+            self._rclick_bind_id = self._root.after_idle(
+                self._bind_rclick_close,
+            )
+        except Exception as exc:
+            logger.debug("after_idle Button-3: %r", exc)
+            self._rclick_bind_id = None
+
         try:
             self._focus_bind_id = self._root.bind(
                 "<FocusOut>", self._on_focus_out, add="+",
@@ -381,17 +409,52 @@ class ContextMenu:
             logger.debug("bind FocusOut: %r", exc)
             self._focus_bind_id = None
 
+    def _bind_rclick_close(self) -> None:
+        """Отложенный bind Button-3 (см. _bind_close)."""
+        self._rclick_bind_id = None
+        if self._top is None:
+            return
+        try:
+            self._rclick_bind = self._root.bind(
+                "<Button-3>", self._on_global_click, add="+",
+            )
+        except Exception as exc:
+            logger.debug("bind Button-3: %r", exc)
+            self._rclick_bind = None
+
     def _unbind_close(self) -> None:
         if self._click_bind_id is not None:
             try:
-                self._root.unbind("<Button-1>", self._click_bind_id)
+                self._root.unbind(
+                    "<Button-1>", self._click_bind_id,
+                )
             except Exception as exc:
                 logger.debug("unbind Button-1: %r", exc)
             self._click_bind_id = None
 
+        if self._rclick_bind_id is not None:
+            try:
+                self._root.after_cancel(self._rclick_bind_id)
+            except Exception as exc:
+                logger.debug(
+                    "after_cancel Button-3: %r", exc,
+                )
+            self._rclick_bind_id = None
+
+        if self._rclick_bind is not None:
+            try:
+                self._root.unbind(
+                    "<Button-3>", self._rclick_bind,
+                )
+            except Exception as exc:
+                logger.debug("unbind Button-3: %r", exc)
+            self._rclick_bind = None
+
         if self._focus_bind_id is not None:
             try:
-                self._root.unbind("<FocusOut>", self._focus_bind_id)
+                self._root.unbind(
+                    "<FocusOut>", self._focus_bind_id,
+                )
             except Exception as exc:
                 logger.debug("unbind FocusOut: %r", exc)
             self._focus_bind_id = None
@@ -422,7 +485,9 @@ class ContextMenu:
             logger.debug("focus_get: %r", exc)
             return
         if focused is None:
-            logger.debug("фокус потерян — контекстное меню закрыто")
+            logger.debug(
+                "фокус потерян — контекстное меню закрыто",
+            )
             self.close()
 
     def _is_inside(self, x_root: int, y_root: int) -> bool:
@@ -434,6 +499,8 @@ class ContextMenu:
             w = self._top.winfo_width()
             h = self._top.winfo_height()
         except Exception as exc:
-            logger.debug("геометрия контекстного меню: %r", exc)
+            logger.debug(
+                "геометрия контекстного меню: %r", exc,
+            )
             return False
         return x <= x_root <= x + w and y <= y_root <= y + h
