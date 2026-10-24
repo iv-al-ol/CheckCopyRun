@@ -1,4 +1,4 @@
-# Project Rules (Python 3.14+ & Flet 1.0.0+)
+# Project Rules — CheckCopyRun
 
 ## 0. Workflow, AI Context & Task Lifecycle (CRITICAL)
 - **Context bootstrap**: BEFORE starting ANY task, always read every file inside the `.ai/` directory (`.ai/todo.md`, `.ai/changelog.md`, `.ai/system_architecture.md`, etc.) to load the current project context.
@@ -6,121 +6,86 @@
 - **Empty current task**: If `## 🎯 Текущая задача` is empty, agree on the next task with the user and move it there from the `## 📋 Очередь задач` block of `.ai/todo.md` first.
 - **Task completion**: Once a task is finished AND tested, you MUST remove it from `.ai/todo.md` and record it in `.ai/changelog.md` with the current date and a short description of exactly what was done/changed in the code.
 
-## 1. Tech Stack, MCP Integration & Core Principles
-- **Language**: Python 3.14+. Strict PEP 8 compliance. Type hints are mandatory everywhere.
-- **Framework**: Flet 1.0.0+ (Production-ready). Declarative UI paradigm.
-- **MCP Validation**: BEFORE generating or updating any Flet controls, you MUST invoke the `flet-mcp` tool to verify actual 1.0.0+ component signatures and properties. Do not rely on pre-1.0 training data.
-- **Paradigm**: DRY, Single Responsibility Principle. Absolute ban on global variables. Maximum indentation nesting depth: 3.
+## 1. Tech Stack & Core Principles
+- **Platform**: Windows 10+ only. Uses WinAPI (`SHGetKnownFolderPath`, `CryptProtectData`, `MonitorFromRect`), long paths, `explorer.exe`.
+- **Language**: Python 3.12+ (`requires-python = ">=3.12"`). `ruff.toml` targets `py314`. Strict type hints are mandatory everywhere. PEP 8 + Ruff config (`line-length = 120`, `select = [E, W, F, I, N, UP, ANN, ASYNC, S, PTH, RUF]`).
+- **UI**: `customtkinter` (on top of `tkinter`). No Flet, PyQt, Kivy, etc.
+- **Images**: `Pillow` (icons, previews).
+- **System**: `pywin32` (WinAPI — only where `ctypes` is inconvenient).
+- **Tray (planned)**: `pystray` — only when the tray task is picked up; not used yet.
+- **Build**: `Nuitka` via `build.py` (see §10).
+- **Package manager**: `uv` (`pyproject.toml`, `[tool.uv] package = false`).
+- **Linting**: `ruff` (`ruff.toml`). Before handing off a task — `ruff check` must pass.
+- **Paradigm**: DRY, SRP. Absolute ban on global variables. Maximum indentation nesting depth: 3.
+- **Dependencies**: only from `pyproject.toml`. Do not add a new library if the task is solvable with the standard library.
 
 ## 2. Localization (CRITICAL)
-- **ALL** UI text, inline comments, docstrings (Google style), commits, and system logs MUST be written exclusively in **Russian**.
-- Use the standard `logging` module for tracing. NEVER use `print()`.
+- **ALL** UI texts, inline comments, docstrings (Google style), log messages and commits MUST be written exclusively in **Russian**.
+- Identifiers (function, class, variable names) MUST be in English, `snake_case` / `PascalCase` per standard.
+- Dialog texts are coordinated with the product; changing them "along the way" without an explicit request is forbidden.
 
-## 3. Flet 1.0.0+ Architecture & State Management
-- **Async Core**: All event handlers, background tasks, and initialization functions MUST be `async def`.
-- **Event Loop**: Never use synchronous `time.sleep()`. Use `await asyncio.sleep()`. Blockings tasks must be offloaded via `await asyncio.to_thread()`.
-- **Entry Point**: Define `def main(page: ft.Page)` and launch strictly via `ft.run(main)`.
-- **State Management**: Use declarative state hooks (`value, setter = ft.use_state(initial)`, `ft.use_effect()`) or `@dataclass` + `@ft.observable` for encapsulation. Global variables and global dictionaries for state are strictly forbidden.
-- **UI Updates**: NEVER call `page.update()` manually inside `@ft.component` declarative components (Flet 1.0.0 auto-updates UI based on state changes). In imperative code (e.g., routing), call `page.update()` explicitly.
-- **Routing**: Prefer declarative routing (`page.render(window)` / `page.render_views(window)`). Imperative routing via `page.views` + `page.on_route_change` + `page.on_view_pop` is allowed and is a standard Flet 1.0.0+ pattern.
-- **Properties & Constants**:
-  - For colors, use lower-case strings (`"red"`, `"#FF0000"`) or classes (`ft.Colors.RED`).
-  - For icons, use clean short strings (`"home"`, `"settings"`) or formal enum classes (`ft.Icons.HOME`). Syntax like `"icons.HOME"` is invalid.
-  - Buttons: Use `ft.Button(content=ft.Text("..."))` instead of the deprecated `ft.ElevatedButton(text="...")`.
-- **Background Tasks**: Register and run background tasks via `page.run_task(coroutine)`. Do not use the `threading` module.
+## 3. UI Layer (CustomTkinter / Tkinter)
+- **Entry point**: `main.py` → `main() -> int` → `MainWindow(ctk.CTk)` → `app.mainloop()`. No other entrypoints.
+- **Thread-safety**: Tkinter is not thread-safe. All UI updates MUST happen in the main thread via `self.after(0, fn)` (in `MainWindow` this is `scheduler`).
+- **Long operations**: never run in the UI thread. Moved into `services/*` (usually `threading.Thread`), events returned via `scheduler`.
+- **Routing**: `ui/navigation/router.py` is the only way to switch screens. Views are registered by factory, lazy, `on_show()` is the refresh point.
+- **Main window is the orchestrator**: `MainWindow` owns `CopyService`, `RestoreService`, `Router`, `StatusBar`. Views do not create services and do not talk to them directly — only through `window.*`.
+- **Dialogs**: only through the factory `ui/dialogs/setup_dialog` + `center_on_parent` + `bring_to_front`. Button styles — `ui/components/button.py` (`VARIANT_PRIMARY`, `VARIANT_SECONDARY`, `VARIANT_DANGER`).
+- **Theme**: `ui/themes.py::apply_theme`. Do not hardcode theme colors — take them from `ui/palette.py`.
+- **Fonts**: `ui/fonts.py::get_font` / `get_emoji_font`. Do not create `ctk.CTkFont` directly.
+- **Icons**: `ui/components/image_utils.py::load_ctk_image` (Pillow → CTkImage). Emoji — via `get_emoji_font` (`Segoe UI Emoji`).
+- **Async labels / background computations in UI**: if the result can become stale — use a generation counter (`_label_gen` in `ProfileView`), discard stale results.
+- **Tooltip**: `ui/components/tooltip.py`. Hiding — on `<Leave>` + safety-polling; do not rely on a single event alone.
 
-## 4. Code Quality & Error Handling
-- Catch only specific, granular exceptions (`except ValueError as e:`). Broad `except Exception:` blocks are banned.
-- Log infrastructure exceptions using `logger.error(..., exc_info=True)`.
-- Display user-facing errors gracefully through UI controls: `ft.SnackBar` or `ft.AlertDialog`.
-- Use context managers (`with` statements) for resource handling. Fetch all secrets strictly from environment variables via `os.getenv()`.
-- Define all magic numbers and configuration literals as UPPER_SNAKE_CASE constants.
+## 4. Services / Business Logic
+- **Isolation from UI**: `services/*` MUST NOT import `customtkinter`, `tkinter`, `ui.*`. All interaction — via callbacks (`on_progress`, `on_done`, `on_error`).
+- **Long operations**: `threading.Thread(daemon=True)` with an explicit `name` (for logs). Cancellation — `threading.Event` (`cancel_event`).
+- **Scheduler**: injected from outside. In `MainWindow` — `lambda fn: self.after(0, fn)`; in tests — `lambda fn: fn()` (synchronous). Services MUST NOT call `after` themselves.
+- **Errors**: internal — to the log (`logger.exception`), external — only via `on_error(message: str)`. No "silent" swallowing on the boundary.
+- **No print()** — use `logger`.
+- **State**: a service is stateless or holds the state of a single run. No global singletons.
 
-## 5. Testing
-- Testing Framework: `pytest`. Handle asynchronous tests via `pytest-asyncio`.
-- Test Naming Convention: `test_<target_function>_<test_condition>_<expected_outcome>`.
-- Isolate logic from layout: Mock Flet controls in unit tests. Do not test frontend rendering; test the underlying business logic and state transitions.
+## 5. Filesystem, CAS & Long Paths
+- **Any I/O** MUST go through `core/long_io.py` (`open`, `copy2`, `makedirs`, `remove`, `replace`, `walk`, `stat`, `isdir`, `isfile`, `exists`, `listdir`, `scandir`, `disk_usage`). Direct `os.*` / `shutil.*` / `builtins.open` inside services are forbidden.
+- **pathlib** — only for path manipulation (join, parent, name). For I/O — `long_io`.
+- **Path comparison** — `os.path.abspath` + `os.path.normcase`, no `Path.resolve` (the latter does not support long paths). Ready helper — `core/paths.py::path_conflict_error`.
+- **explorer.exe** does not understand the `\\?\` prefix — pass only the "plain" path to `explorer`. This is an OS limitation, not the app's.
+- **Service folder `!CCRun`** in destination is an internal contract: `blobs/`, `states/`, `current.json`, `hashes.json`. The structure is part of CAS and must not be changed without a migration.
+- **Atomicity**: any `!CCRun` file (and `settings.dat`) MUST be written via `.tmp` + `os.replace`. Intermediate state must not be visible to other processes.
+- **Deleting blobs** — only via `BlobStore.gc(keep)` after diffing against the set of used hashes. Direct `unlink` of a blob is forbidden.
 
-## 6. Flet 1.0.0+ Cheat Sheet (verified via flet-mcp)
-- Consult this section FIRST. Invoke `flet-mcp` only for patterns not covered here.
-- After MCP verification, extend this section with the confirmed signature so future work needs fewer MCP calls.
+## 6. Settings, Secrets & Persistence
+- **Settings**: `%USERPROFILE%/Documents/CheckCopyRun/settings.dat`, DPAPI encryption (`services/dpapi.py`). Bound to the current Windows user.
+- **Secrets**: only via `os.getenv()`. No secrets in code or logs.
+- **Migrations**: old fields must not crash — `_from_dict` reads with defaults, unknown keys ignored.
+- **Constants**: all "magic" numbers and strings — `UPPER_SNAKE_CASE` in `config/constants.py` or in the owning module.
 
-### Entry Point
-```python
-def main(page: ft.Page):
-    ...
-ft.run(main)
-```
+## 7. Logging
+- **Module**: `utils/logger.py::get_logger(__name__)` in every module.
+- **File**: `Documents/CheckCopyRun/log/app.log`, `RotatingFileHandler`, UTF-8.
+- **Levels**: `debug` — diagnostics, `info` — significant events, `warning` — unexpected but not fatal, `error` — with `exc_info=True` for exceptions.
+- **No print()**. Neither in code nor in tests (for debugging — `logger.debug`, `pytest -s`).
 
-### Declarative Component & State Hooks
-```python
-@ft.component
-def App():
-    count, set_count = ft.use_state(0)
-    return ft.SafeArea(
-        content=ft.Row(
-            controls=[
-                ft.Text(value=f"{count}"),
-                ft.Button("Add", on_click=lambda: set_count(count + 1)),
-            ]
-        )
-    )
-```
+## 8. Code Quality
+- **Exceptions**: only specific (`except OSError as e:`, `except ValueError as e:`). Broad `except Exception:` is forbidden in business logic; on boundaries (top-level callback, background thread, `scheduler`) it is allowed only with `logger.error(..., exc_info=True)`.
+- **Context managers**: `with open(...)`, `with long_io.open(...)`. No manual `close()`.
+- **Imports**: sorted by Ruff (`known-first-party = ["config", "core", "services", "ui", "utils"]`). Absolute imports, no relative (except within a single package).
+- **Docstrings**: Google style, in Russian, only for public entities. Internal — optional.
+- **Magic numbers**: forbidden. Everything — in `UPPER_SNAKE_CASE`.
+- **Nesting**: maximum 3 levels. Deeper — extract into a function.
 
-### Rendering & Observable State
-```python
-ft.run(lambda page: page.render(window))         # without View
-ft.run(lambda page: page.render_views(window))   # with View
-# Observable state:
-@dataclass
-@ft.observable
-class AppState:
-    counter: float
-    async def start_counter(self):
-        await asyncio.sleep(0.5)   # async methods are allowed
-```
+## 9. Testing
+- **Framework**: `pytest`. Config — `[tool.pytest.ini_options]` in `pyproject.toml` (`testpaths = ["tests"]`, `pythonpath = ["."]`).
+- **What we test**: `services/*` and pure functions (`core/paths.py`, `core/long_io.py`, `services/selection_model.py`, `services/destination_state.py`, `services/startup_check.py`, etc.).
+- **What we do not test**: CustomTkinter rendering, Tk widgets, real `filedialog`, real `explorer`. The UI layer is tested manually.
+- **Isolation from Tk**: tests MUST NOT import `customtkinter`. If a `scheduler` is needed — `lambda fn: fn()`.
+- **Fixtures**: `tests/conftest.py` — `src`, `dst`, `run_copy`, `run_restore`. For new scenarios add fixtures there as well.
+- **Naming**: `test_<target_function>_<test_condition>_<expected_outcome>`.
+- **Windows-only tests**: mark with `pytest.mark.skipif(not sys.platform == "win32", ...)`.
 
-### Dialogs
-```python
-page.show_dialog(ft.SnackBar(ft.Text("...")))
-page.show_dialog(ft.AlertDialog(...))
-page.pop_dialog()
-```
-
-### Routing (Imperative, Standard Pattern)
-```python
-page.on_route_change = handler
-page.on_view_pop = async_handler          # e: ft.ViewPopEvent
-page.on_views_pop_until = handler         # e: ft.ViewsPopUntilEvent
-await page.push_route("/path")
-await page.pop_views_until("/", result="...")
-ft.View(can_pop=False, on_confirm_pop=...)  # await view.confirm_pop(True)
-page.update()  # required in imperative routing
-```
-
-### Naming: Colors, Icons, Layout
-```python
-ft.Colors.SURFACE_BRIGHT, ft.Colors.PINK
-ft.Icons.HOME, ft.Icons.HOME_OUTLINED, ft.Icons.ADD, ft.Icons.MENU
-ft.Padding.all(10)
-ft.Alignment.CENTER
-ft.MainAxisAlignment.SPACE_AROUND, ft.MainAxisAlignment.END
-ft.CrossAxisAlignment.CENTER
-ft.FontWeight.BOLD
-ft.TextThemeStyle.BODY_MEDIUM
-ft.Text(value=..., size=50)   # ft.ProgressBar(value) - positional
-```
-
-### Event Typing
-```python
-ft.Event[ft.Button], ft.Event[ft.TimePicker], ft.Event[ft.DialogControl]
-ft.ViewPopEvent, ft.ViewsPopUntilEvent, ft.TimePickerEntryModeChangeEvent
-```
-
-### Async in Handlers
-```python
-async def handler(e):
-    await page.push_route("/x")
-# from sync context:
-asyncio.create_task(page.push_route("/x"))
-```
+## 10. Build & Distribution
+- **Build**: `uv run build.py` (folder), `uv run build.py --onefile` (single `.exe`), `uv run build.py --debug` (with console).
+- **Artifact**: `build/CCRun.exe` (or `build/CCRun.dist/CCRun.exe`). Exe name — `CCRun`; product name — `Check, Copy & Run`; company — `CheckCopyRun`. Version — from `config/constants.py::APP_VERSION`.
+- **Icon**: `assets/icon.ico`. Embedded via `--windows-icon-from-ico`, copied as data via `--include-data-dir`.
+- **Entrypoint**: `main.py`. Nuitka builds exactly this file.
+- **Not shipped**: `tests/`, `pytest`, `ruff`, `mypy`, `pip`, `setuptools` — listed in `build.py::_NOFOLLOW_IMPORTS`.

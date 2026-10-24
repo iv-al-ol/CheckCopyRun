@@ -3,35 +3,26 @@
 
 Фазы прогресса:
   • "copy"         — копирование файлов;
-  • "save_scan"    — сканирование destination (stat+hash);
-  • "save_store"   — сохранение новых blob-ов в хранилище.
+  • "save_scan"    — сканирование destination;
+  • "save_store"   — сохранение новых blob-ов.
 
-Дедупликация состояний:
-  • перед созданием state_before/state_after ищем среди
-    существующих state-файлов такой, чьё содержимое совпадает
-    с текущим data. Если нашли — переиспользуем (не создаём
-    новый файл);
-  • restore_point исключён из поиска (у него отдельная
-    семантика в UI);
-  • если состояние совпадает с current.state — вообще ничего
-    не делаем.
+Дедупликация состояний: state_before/state_after переиспользуют
+существующий state-файл с идентичным содержимым.
 
-Это устраняет разрастание списка резервных копий: при copy
-без изменений, при copy после restore, при повторных
-состояниях новых файлов не появляется.
+Поддержка длинных путей Windows: I/O через long_io.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.paths import path_conflict_error
+from core import long_io
+from core.paths import path_conflict_error, to_long_path
 from services.blob_store import BlobStore
 from services.copy_constants import (
     STATE_KIND_AUTO,
@@ -85,14 +76,10 @@ __all__ = [
 ]
 
 
-# --- Фазы ---
-
 PHASE_COPY = "copy"
 PHASE_SAVE_SCAN = "save_scan"
 PHASE_SAVE_STORE = "save_store"
 
-
-# --- Результаты ---
 
 @dataclass
 class CopyProgress:
@@ -115,21 +102,16 @@ class CopyResult:
     copied: int = 0
     skipped: int = 0
     errors: int = 0
-
     backup_dir: str | None = None
-
     state_before_path: str | None = None
     state_after_path: str | None = None
-
     cancelled: bool = False
     elapsed_sec: float = 0.0
-
     rollback_attempted: bool = False
     rolled_back: bool = False
     rollback_restored: int = 0
     rollback_deleted: int = 0
     rollback_errors: int = 0
-
     mirror_removed_files: int = 0
     mirror_removed_dirs: int = 0
 
@@ -151,10 +133,8 @@ def format_cancel_status(result: CopyResult) -> str:
 
 
 def format_copy_status(result: CopyResult) -> str:
-    """Текст для статус-бара после завершения копирования."""
     if result.cancelled:
         return format_cancel_status(result)
-
     if result.errors:
         parts = [
             f"скопировано {result.copied}",
@@ -167,7 +147,6 @@ def format_copy_status(result: CopyResult) -> str:
         result.mirror_removed_files > 0
         or result.mirror_removed_dirs > 0
     )
-
     if result.copied == 0 and not mirror_changed:
         if result.skipped == 0:
             return "Копирование завершено: файлов в источнике нет"
@@ -196,18 +175,16 @@ def _plural_files(n: int) -> str:
     return "файлов"
 
 
-# --- Проверки ---
-
 def _validate(source: str, destination: str) -> None:
     if not source:
         raise CopyValidationError("Не указана исходная директория")
     if not destination:
         raise CopyValidationError("Не указана целевая директория")
-    if not Path(source).is_dir():
+    if not long_io.isdir(source):
         raise CopyValidationError(
             f"Исходная директория не найдена: {source}",
         )
-    if not Path(destination).is_dir():
+    if not long_io.isdir(destination):
         raise CopyValidationError(
             f"Целевая директория не найдена: {destination}",
         )
@@ -215,8 +192,6 @@ def _validate(source: str, destination: str) -> None:
     if conflict:
         raise CopyValidationError(conflict)
 
-
-# --- Воркер ---
 
 class _CopyWorker(threading.Thread):
     def __init__(
@@ -260,8 +235,6 @@ class _CopyWorker(threading.Thread):
         self._mirror_removed_files: list[str] = []
         self._mirror_removed_dirs: list[str] = []
 
-    # --- Публичное ---
-
     def run(self) -> None:
         started = time.perf_counter()
 
@@ -300,7 +273,6 @@ class _CopyWorker(threading.Thread):
                     f"Ошибка инициализации хранилища: {exc}"
                 )
                 return
-
             self._ensure_state_before()
 
         processed = 0
@@ -345,12 +317,11 @@ class _CopyWorker(threading.Thread):
         self._cache.save()
         self._emit_done()
 
-    # --- Сбор файлов ---
-
     def _collect_files(self) -> list[str]:
         result: list[str] = []
-        for root, dirs, names in os.walk(self._source):
-            rel_root = os.path.relpath(root, self._source)
+        top = to_long_path(self._source)
+        for root, dirs, names in long_io.walk(top):
+            rel_root = os.path.relpath(root, top)
             if rel_root == ".":
                 dirs[:] = [
                     d for d in dirs
@@ -358,14 +329,12 @@ class _CopyWorker(threading.Thread):
                 ]
             for name in names:
                 full = os.path.join(root, name)
-                rel = os.path.relpath(full, self._source)
+                rel = os.path.relpath(full, top)
                 first = rel.split(os.sep, 1)[0]
                 if is_special_first_segment(first):
                     continue
                 result.append(rel)
         return result
-
-    # --- Обработка файла ---
 
     def _process_file(self, rel_path: str) -> bool:
         src_path = os.path.join(self._source, rel_path)
@@ -375,8 +344,8 @@ class _CopyWorker(threading.Thread):
         if dst_dir:
             self._ensure_dst_dir(dst_dir)
 
-        if not os.path.isfile(dst_path):
-            shutil.copy2(src_path, dst_path)
+        if not long_io.isfile(dst_path):
+            long_io.copy2(src_path, dst_path)
             self._result.copied += 1
             self._cache_new_file(rel_path, src_path)
             return True
@@ -388,7 +357,7 @@ class _CopyWorker(threading.Thread):
             self._result.skipped += 1
             return False
 
-        shutil.copy2(src_path, dst_path)
+        long_io.copy2(src_path, dst_path)
         self._result.copied += 1
 
         if self._cache.enabled:
@@ -410,7 +379,7 @@ class _CopyWorker(threading.Thread):
         if not self._cache.enabled:
             return
         try:
-            st = os.stat(src_path)
+            st = long_io.stat(src_path)
             sha = hash_file(src_path, self._cache.algorithm)
         except OSError as exc:
             logger.debug(
@@ -434,10 +403,10 @@ class _CopyWorker(threading.Thread):
 
     @staticmethod
     def _ensure_dst_dir(dst_dir: str) -> None:
-        if not dst_dir or os.path.isdir(dst_dir):
+        if not dst_dir or long_io.isdir(dst_dir):
             return
         try:
-            os.makedirs(dst_dir, exist_ok=True)
+            long_io.makedirs(dst_dir, exist_ok=True)
         except OSError as exc:
             logger.error(
                 "Не удалось создать %s: %r", dst_dir, exc,
@@ -467,7 +436,6 @@ class _CopyWorker(threading.Thread):
 
         current_data = self._load_current_state()
 
-        # Пустой destination + нет current — нечего откатывать.
         if (
             current_data is None
             and not data.files
@@ -509,11 +477,6 @@ class _CopyWorker(threading.Thread):
         assert self._current is not None
 
         if not self._changed:
-            # Изменений нет. Если был определён state_before
-            # (создан или переиспользован), зафиксируем его в
-            # current — это устраняет «current указывает не
-            # туда», если пользователь пришёл из restore или
-            # ручного откката.
             if self._result.state_before_path:
                 name = Path(
                     self._result.state_before_path,
@@ -590,7 +553,6 @@ class _CopyWorker(threading.Thread):
             return None
 
     def _populate_for_data(self, data: StateData) -> None:
-        """Сохранение новых blob-ов с прогрессом."""
         if self._blobs is None:
             return
         new_files = self._find_new_blobs(data)
@@ -615,14 +577,6 @@ class _CopyWorker(threading.Thread):
     def _find_or_create_state(
         self, data: StateData, *, kind_state: str,
     ) -> tuple[str, bool]:
-        """Переиспользует существующий state с таким же
-        содержимым или создаёт новый.
-
-        Возвращает (name, created):
-          • created=True — создан новый state-файл;
-          • created=False — переиспользован существующий;
-          • ("", False) — не удалось создать.
-        """
         assert self._state_store is not None
 
         existing = self._find_matching_state(
@@ -654,15 +608,6 @@ class _CopyWorker(threading.Thread):
         *,
         exclude_kinds: set[str] | None = None,
     ) -> str | None:
-        """Ищет существующий state, чьё содержимое совпадает с data.
-
-        Быстрая проверка по summary (files_count и
-        empty_dirs_count), затем полная — по {path: sha256} и
-        empty_dirs.
-
-        exclude_kinds — какие kind пропускать (например,
-        restore_point в copy).
-        """
         if self._state_store is None:
             return None
 
@@ -681,7 +626,6 @@ class _CopyWorker(threading.Thread):
             return None
 
         for info in infos:
-            # Быстрая отбраковка без загрузки.
             if info.files_count != n_files:
                 continue
             if info.empty_dirs_count != n_empty:
@@ -755,17 +699,17 @@ class _CopyWorker(threading.Thread):
     ) -> None:
         if self._blobs is None:
             return
-        base = Path(self._destination)
+        base = to_long_path(self._destination)
         total = len(files_to_add)
         new_count = 0
         new_bytes = 0
 
         for idx, f in enumerate(files_to_add, 1):
-            full = base / f.path
-            if full.is_file():
+            full = os.path.join(base, f.path)
+            if long_io.isfile(full):
                 try:
                     is_new = self._blobs.put(
-                        str(full), f.sha256,
+                        full, f.sha256,
                     )
                 except Exception as exc:
                     logger.warning(
@@ -787,8 +731,6 @@ class _CopyWorker(threading.Thread):
         data.summary["new_blobs_count"] = new_count
         data.summary["new_blobs_bytes"] = new_bytes
 
-    # --- Mirror ---
-
     def _apply_mirror(self) -> bool:
         extra_files, extra_dirs = (
             self._scan_destination_diff()
@@ -803,10 +745,11 @@ class _CopyWorker(threading.Thread):
         )
 
         changed = False
+        base = to_long_path(self._destination)
         for rel in extra_files:
-            dst = os.path.join(self._destination, rel)
+            dst = os.path.join(base, rel)
             try:
-                os.remove(dst)
+                long_io.remove(dst)
                 self._mirror_removed_files.append(rel)
                 self._result.mirror_removed_files += 1
                 changed = True
@@ -823,13 +766,13 @@ class _CopyWorker(threading.Thread):
             reverse=True,
         )
         for rel in extra_dirs:
-            dst = os.path.join(self._destination, rel)
+            dst = os.path.join(base, rel)
             try:
-                if not os.path.isdir(dst):
+                if not long_io.isdir(dst):
                     continue
-                if os.listdir(dst):
+                if long_io.listdir(dst):
                     continue
-                os.rmdir(dst)
+                long_io.rmdir(dst)
                 self._mirror_removed_dirs.append(rel)
                 self._result.mirror_removed_dirs += 1
                 changed = True
@@ -845,8 +788,11 @@ class _CopyWorker(threading.Thread):
     ) -> tuple[list[str], list[str]]:
         extra_files: list[str] = []
         extra_dirs: list[str] = []
-        for root, dirs, names in os.walk(self._destination):
-            rel_root = os.path.relpath(root, self._destination)
+        dst_top = to_long_path(self._destination)
+        src_top = to_long_path(self._source)
+
+        for root, dirs, names in long_io.walk(dst_top):
+            rel_root = os.path.relpath(root, dst_top)
             filtered: list[str] = []
             for d in dirs:
                 full = os.path.join(root, d)
@@ -858,23 +804,21 @@ class _CopyWorker(threading.Thread):
             dirs[:] = filtered
             for name in names:
                 full = os.path.join(root, name)
-                rel = os.path.relpath(full, self._destination)
+                rel = os.path.relpath(full, dst_top)
                 if rel_root == "." and is_special_first_segment(
                     rel.split(os.sep, 1)[0]
                 ):
                     continue
-                src_path = os.path.join(self._source, rel)
-                if not os.path.isfile(src_path):
+                src_path = os.path.join(src_top, rel)
+                if not long_io.isfile(src_path):
                     extra_files.append(rel)
             for d in dirs:
                 full = os.path.join(root, d)
-                rel = os.path.relpath(full, self._destination)
-                src_path = os.path.join(self._source, rel)
-                if not os.path.isdir(src_path):
+                rel = os.path.relpath(full, dst_top)
+                src_path = os.path.join(src_top, rel)
+                if not long_io.isdir(src_path):
                     extra_dirs.append(rel)
         return extra_files, extra_dirs
-
-    # --- Автооткат ---
 
     def _perform_rollback(self) -> None:
         if (
@@ -992,8 +936,6 @@ class _CopyWorker(threading.Thread):
                 return None
         return None
 
-    # --- Доставка событий ---
-
     def _emit_progress(self, processed: int) -> None:
         progress = CopyProgress(
             processed=processed,
@@ -1062,8 +1004,6 @@ class _CopyWorker(threading.Thread):
             )
 
 
-# --- Пустое состояние ---
-
 def _empty_state() -> StateData:
     return StateData(
         version=STATE_VERSION,
@@ -1082,11 +1022,7 @@ def _empty_state() -> StateData:
     )
 
 
-# --- Сервис ---
-
 class CopyService:
-    """Управляет одним активным копированием."""
-
     def __init__(
         self,
         scheduler: Callable[[Callable[[], None]], None] | None = None,

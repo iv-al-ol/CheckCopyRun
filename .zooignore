@@ -1,48 +1,54 @@
-# --- Игнорирование системных каталогов ИИ ---
+# --- Системные каталоги AI ---
 .git/
 .github/
 .cline/
 .roo/
 .zoo/
+.ai/
 
-# --- Виртуальное окружение и кэш Python (не несут полезной логики для ИИ) ---
+# --- Виртуальное окружение и кэши Python ---
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*.so
+.Python
 .venv/
 venv/
 ENV/
+env.bak/
+venv.bak/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
 
-# --- Специфичные папки сборщика Flet и тяжелые артефакты компиляции ---
-.flet/
-flet_bundle/
+# --- Nuitka: артефакты сборки ---
 build/
 dist/
-*.apk
-*.aab
-*.ipa
+*.build/
+*.dist/
+*.onefile-build/
 *.exe
 *.dmg
 *.msi
+*.apk
+*.aab
+*.ipa
 
 # --- Настройки сред разработки (IDE) ---
 .vscode/
 .idea/
+*.code-workspace
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.swp
 
-# --- Файлы статических ресурсов (картинки, шрифты, аудио) ---
-assets/images/
-assets/fonts/
-assets/audio/
-assets/video/
+# --- Бинарные ассеты (не полезны для AI-контекста) ---
+assets/
 *.png
 *.jpg
 *.jpeg
@@ -56,7 +62,7 @@ assets/video/
 *.mp4
 *.avi
 
-# --- Секреты, настройки среды и локальные базы данных ---
+# --- Секреты, локальные БД и логи ---
 .env
 .env.*
 *.db
@@ -64,12 +70,14 @@ assets/video/
 *.sqlite3
 *.log
 
-# --- Документы сборки и отчеты о покрытии кода ---
-htmlcov/
-.tox/
-.coverage
-.cache
-nosetests.xml
-coverage.xml
-*.mo
-*.po
+# --- Отчёты и служебные артефакты проекта ---
+reports/
+inspect/
+inspect_report.txt
+
+# --- Служебные папки в destination (не внутри проекта, но на всякий случай) ---
+!CCRun/
+!Backup_*/
+
+# --- Сами правила игнора ---
+.zooignore

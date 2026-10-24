@@ -1,30 +1,22 @@
 """Применение плана restore к файловой системе.
 
-Порядок:
-  1. Восстановить файлы из blob-ов (mkdir предков по мере
-     необходимости).
-  2. Создать пустые директории из плана.
-  3. Удалить лишние файлы.
-  4. Удалить опустевшие директории, не входящие в needed_dirs.
+Поддержка длинных путей: I/O через long_io.
 
-Пути сравниваются в нормализованном виде (`/`), чтобы
-работать и на Windows, и на posix, и не зависеть от того,
-какие разделители попали в state-файл.
-
-Защита от path traversal: пути из state проверяются на выход
-за пределы destination. Служебные сегменты (!CCRun, !Backup_*)
-пропускаются.
+_safe_path возвращает Path: так удобнее работать с родителем
+(dst.parent) и str-конверсией для long_io. Все I/O-вызовы
+принимают str — Path конвертируется через str() на месте.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from core import long_io
+from core.paths import to_long_path
 from services.copy_constants import (
     TMP_SUFFIX,
     is_special_first_segment,
@@ -56,11 +48,10 @@ def apply_plan(
     on_progress: Callable[[int, int], None] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> ApplyResult:
-    """Применяет план к destination."""
     result = ApplyResult()
     total = plan.total_actions
     processed = 0
-    base = Path(destination)
+    base = to_long_path(destination)
 
     # 1. Restore
     for state_file, blob_path in plan.to_restore:
@@ -77,15 +68,15 @@ def apply_plan(
             continue
 
         try:
-            dst.parent.mkdir(parents=True, exist_ok=True)
+            long_io.makedirs(str(dst.parent), exist_ok=True)
             tmp = str(dst) + TMP_SUFFIX
             try:
-                shutil.copy2(str(blob_path), tmp)
-                os.replace(tmp, str(dst))
+                long_io.copy2(str(blob_path), tmp)
+                long_io.replace(tmp, str(dst))
             except Exception:
                 try:
-                    if os.path.exists(tmp):
-                        os.remove(tmp)
+                    if long_io.exists(tmp):
+                        long_io.remove(tmp)
                 except OSError:
                     pass
                 raise
@@ -105,10 +96,10 @@ def apply_plan(
             result.cancelled = True
             return result
         try:
-            _safe_path(base, rel)   # валидация
-            target_dir = base / rel
-            if not target_dir.exists():
-                target_dir.mkdir(parents=True, exist_ok=True)
+            _safe_path(base, rel)
+            target_dir = os.path.join(base, rel)
+            if not long_io.exists(target_dir):
+                long_io.makedirs(target_dir, exist_ok=True)
                 result.created_dirs += 1
         except ValueError as exc:
             logger.warning("mkdir: %r", exc)
@@ -126,10 +117,10 @@ def apply_plan(
             result.cancelled = True
             return result
         try:
-            _safe_path(base, rel)   # валидация
-            p = base / rel
-            if p.is_file():
-                p.unlink()
+            _safe_path(base, rel)
+            p = os.path.join(base, rel)
+            if long_io.isfile(p):
+                long_io.remove(p)
                 result.deleted_files += 1
         except ValueError as exc:
             logger.warning("delete: %r", exc)
@@ -141,7 +132,7 @@ def apply_plan(
         processed += 1
         _emit(on_progress, processed, total)
 
-    # 4. Cleanup пустых директорий
+    # 4. Cleanup
     try:
         result.deleted_dirs = _cleanup_empty_dirs(
             destination, plan.needed_dirs,
@@ -153,10 +144,7 @@ def apply_plan(
     return result
 
 
-# --- Вспомогательное ---
-
 def _norm(p: str) -> str:
-    """Приводит path к прямым слэшам для сравнения."""
     return p.replace("\\", "/")
 
 
@@ -172,64 +160,63 @@ def _emit(
         logger.debug("on_progress apply_plan: %r", exc)
 
 
-def _safe_path(base: Path, rel: str) -> Path:
-    """Проверяет, что путь внутри base и не служебный."""
+def _safe_path(base: str, rel: str) -> Path:
+    """Проверяет, что путь внутри base и не служебный.
+
+    Возвращает Path — для удобной работы с .parent и str()
+    при передаче в long_io.
+    """
     first = rel.replace("\\", "/").split("/", 1)[0]
     if is_special_first_segment(first):
         raise ValueError(
             f"Служебный путь в state: {rel!r}"
         )
-    target = (base / rel).resolve()
-    try:
-        target.relative_to(base.resolve())
-    except ValueError as exc:
-        raise ValueError(
-            f"Небезопасный путь в state: {rel!r}"
-        ) from exc
-    return target
+    target = os.path.normpath(os.path.join(base, rel))
+    base_norm = os.path.normpath(base)
+    if not target.startswith(base_norm + os.sep):
+        if target != base_norm:
+            raise ValueError(
+                f"Небезопасный путь в state: {rel!r}"
+            )
+    return Path(target)
 
 
 def _cleanup_empty_dirs(
     destination: str, needed: set[str],
 ) -> int:
-    """Удаляет пустые директории, не входящие в needed.
-
-    Обход снизу вверх. Пропускает служебные корневые папки.
-    Сравнение путей — по нормализованным (`/`) строкам.
-    """
-    base = Path(destination).resolve()
+    base = to_long_path(destination)
     needed_norm = {_norm(p) for p in needed}
-    all_dirs: list[Path] = []
+    all_dirs: list[str] = []
 
     try:
-        for root, dirs, _names in os.walk(destination):
-            rel_root = os.path.relpath(root, destination)
+        for root, dirs, _names in long_io.walk(base):
+            rel_root = os.path.relpath(root, base)
             if rel_root == ".":
                 dirs[:] = [
                     d for d in dirs
                     if not is_special_first_segment(d)
                 ]
             for d in dirs:
-                all_dirs.append(Path(root) / d)
+                all_dirs.append(os.path.join(root, d))
     except OSError as exc:
-        logger.debug("os.walk cleanup: %r", exc)
+        logger.debug("walk cleanup: %r", exc)
         return 0
 
     all_dirs.sort(
-        key=lambda p: len(p.parts), reverse=True,
+        key=lambda p: p.count(os.sep), reverse=True,
     )
 
     deleted = 0
     for d in all_dirs:
         try:
-            rel = str(d.relative_to(base))
+            rel = os.path.relpath(d, base)
         except ValueError:
             continue
         if _norm(rel) in needed_norm:
             continue
         try:
-            if d.is_dir() and not any(d.iterdir()):
-                d.rmdir()
+            if long_io.isdir(d) and not long_io.listdir(d):
+                long_io.rmdir(d)
                 deleted += 1
         except OSError as exc:
             logger.debug("rmdir %s: %r", d, exc)

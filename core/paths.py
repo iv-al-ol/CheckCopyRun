@@ -3,6 +3,12 @@
 Documents через WinAPI (корректно работает с OneDrive и
 перенесёнными папками). Ресурсы через __file__ с учётом
 Nuitka-сборки. Проверки: конфликт source/destination.
+
+Длинные пути Windows (>260): хелперы to_long_path /
+from_long_path / display_path. Порог — LONG_PATH_THRESHOLD
+символов. Специальный длинный префикс применяется только для
+файловых операций; для отображения и внешних инструментов
+(explorer, subprocess) используется исходный путь.
 """
 
 from __future__ import annotations
@@ -101,17 +107,9 @@ def get_documents_dir() -> Path:
 # --- Ресурсы ---
 
 def get_resource_root() -> Path:
-    """Корень ресурсов приложения.
-
-    Работает в трёх режимах:
-      • исходники — от __file__ модуля;
-      • Nuitka --standalone — тот же __file__, но внутри .dist;
-      • Nuitka --onefile — __file__ ведёт в распакованную
-        временную папку, где тоже есть assets/.
-    """
+    """Корень ресурсов приложения."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
-
     return Path(__file__).resolve().parent.parent
 
 
@@ -120,14 +118,109 @@ def get_asset_path(name: str) -> Path:
     return get_resource_root() / "assets" / name
 
 
+# --- Длинные пути Windows ---
+
+MAX_PATH = 260
+# Порог для применения длинного префикса — оставляем запас на
+# имя файла и расширение (обычно до 12 символов).
+LONG_PATH_THRESHOLD = 248
+
+# Префикс длинных путей: две обратные косые черты, вопросительный
+# знак, обратная косая черта (результирующая строка).
+_LONG_PREFIX = "\\\\?\\"
+# UNC-вариант: тот же префикс + "UNC" + обратная косая черта.
+_UNC_PREFIX = "\\\\?\\UNC\\"
+
+
+def is_long_path(path: str | os.PathLike) -> bool:
+    """True, если путь близок к MAX_PATH или превысил его."""
+    if not path:
+        return False
+    try:
+        abs_p = os.path.abspath(str(path))
+    except OSError:
+        return False
+    return len(abs_p) >= LONG_PATH_THRESHOLD
+
+
+def to_long_path(path: str | os.PathLike) -> str:
+    """Приводит путь к виду, пригодному для I/O с длинными путями.
+
+    Всегда возвращает абсолютный путь (os.path.abspath).
+    Если длина >= LONG_PATH_THRESHOLD — добавляет специальный
+    длинный префикс (или UNC-вариант для сетевых путей).
+    Иначе возвращает абсолютный путь без префикса.
+
+    Уже префиксованный путь возвращается как есть.
+    """
+    p = str(path)
+    if not p:
+        return p
+    if p.startswith(_LONG_PREFIX):
+        return p
+    try:
+        abs_p = os.path.abspath(p)
+    except OSError:
+        return p
+    if len(abs_p) < LONG_PATH_THRESHOLD:
+        return abs_p
+
+    abs_p = abs_p.replace("/", "\\")
+    if abs_p.startswith("\\\\"):
+        return _UNC_PREFIX + abs_p[2:]
+    return _LONG_PREFIX + abs_p
+
+
+def from_long_path(path: str | os.PathLike) -> str:
+    """Убирает специальный длинный префикс, если он есть."""
+    p = str(path)
+    if p.startswith(_UNC_PREFIX):
+        return "\\\\" + p[len(_UNC_PREFIX):]
+    if p.startswith(_LONG_PREFIX):
+        return p[len(_LONG_PREFIX):]
+    return p
+
+
+def display_path(path: str | os.PathLike) -> str:
+    """Путь для отображения в UI (без специального префикса)."""
+    return from_long_path(str(path))
+
+
 # --- Проверки ---
 
 def is_valid_directory(path: str) -> bool:
-    return bool(path) and os.path.isdir(path)
+    if not path:
+        return False
+    try:
+        return os.path.isdir(to_long_path(path))
+    except OSError:
+        return False
 
 
 def is_valid_file(path: str) -> bool:
-    return bool(path) and os.path.isfile(path)
+    if not path:
+        return False
+    try:
+        return os.path.isfile(to_long_path(path))
+    except OSError:
+        return False
+
+
+def _compare_key(path: str) -> str:
+    """Ключ для сравнения путей. Не ходит в ФС, работает с
+    длинными путями (без Path.resolve)."""
+    try:
+        abs_p = os.path.abspath(path)
+    except OSError:
+        return path
+    return os.path.normcase(abs_p)
+
+
+def _is_strictly_inside(child: str, parent: str) -> bool:
+    """True, если child строго внутри parent (не равен)."""
+    c = child.rstrip("\\/") + os.sep
+    p = parent.rstrip("\\/") + os.sep
+    return c != p and c.startswith(p)
 
 
 def path_conflict_error(
@@ -136,30 +229,27 @@ def path_conflict_error(
     """Текст конфликта source/destination или None.
 
     Конфликт — совпадение путей или вложенность в любую сторону.
-    Все три случая ведут к рекурсивной перезаписи или копированию
-    в себя.
+    Сравнение через os.path.abspath + normcase, без Path.resolve
+    (resolve не поддерживает длинные пути на Windows).
     """
     if not source or not destination:
         return None
 
     try:
-        src = Path(source).resolve()
-        dst = Path(destination).resolve()
+        src = _compare_key(source)
+        dst = _compare_key(destination)
     except OSError as exc:
         logger.debug(
-            "resolve путей %r / %r: %r", source, destination, exc,
+            "сравнение путей %r / %r: %r", source, destination, exc,
         )
         return None
 
     if src == dst:
         return "Исходная и целевая директории совпадают"
 
-    try:
-        if src in dst.parents:
-            return "Целевая директория находится внутри исходной"
-        if dst in src.parents:
-            return "Исходная директория находится внутри целевой"
-    except Exception as exc:
-        logger.debug("проверка вложенности путей: %r", exc)
+    if _is_strictly_inside(dst, src):
+        return "Целевая директория находится внутри исходной"
+    if _is_strictly_inside(src, dst):
+        return "Исходная директория находится внутри целевой"
 
     return None

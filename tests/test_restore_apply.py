@@ -173,19 +173,21 @@ def test_apply_skips_service_paths(tmp_path):
     dst.mkdir()
     store = BlobStore(str(dst))
 
-    # Попытка восстановить файл в служебную папку.
     target = _state({"!CCRun/evil.json": b"evil"})
     current = _state({})
     plan = build_plan(target, current, store)
 
-    # План содержит missing (blob отсутствует).
     assert plan.to_restore == []
     result = apply_plan(plan, target, str(dst))
     assert not (dst / "!CCRun" / "evil.json").exists()
 
 
 def test_apply_tmp_removed_on_error(tmp_path, monkeypatch):
-    """Если копирование упало — .tmp не остаётся."""
+    """Если копирование упало — .tmp не остаётся.
+
+    Monkeypatch'им long_io.copy2 (не shutil) — именно через
+    него работает restore_apply после перехода на long_io.
+    """
     dst = tmp_path / "dst"
     dst.mkdir()
     (dst / "a.txt").write_bytes(b"new")
@@ -196,22 +198,19 @@ def test_apply_tmp_removed_on_error(tmp_path, monkeypatch):
     current = _state({"a.txt": b"new"})
     plan = build_plan(target, current, store)
 
-    # Заставляем shutil.copy2 упасть — имитация ошибки ФС.
     import services.restore_apply as ra
 
     def boom(*args, **kwargs):
         raise OSError("simulated error")
 
-    monkeypatch.setattr(ra.shutil, "copy2", boom)
+    monkeypatch.setattr(ra.long_io, "copy2", boom)
 
     result = apply_plan(plan, target, str(dst))
     assert result.errors == 1
 
-    # Никаких tmp-файлов.
     leftovers = list(dst.glob(f"*{TMP_SUFFIX}"))
     assert leftovers == []
 
-    # Оригинальное содержимое осталось нетронутым.
     assert (dst / "a.txt").read_bytes() == b"new"
 
 

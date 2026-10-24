@@ -1,26 +1,7 @@
 """Сканирование destination → StateData.
 
-Обходит папку назначения и собирает полное состояние: список
-файлов с sha256, список пустых директорий, агрегаты для UI.
-
-Пропускаются:
-  • служебная папка !CCRun;
-  • старые папки !Backup_* (формат до CAS);
-  • reparse points (symlinks, junctions) — не спускаемся внутрь.
-
-Хэши берутся из HashCache, если запись актуальна (size + mtime_ns
-совпадают). Иначе файл читается и хэшируется заново.
-
-Прогресс:
-  • list_user_files() — быстрый обход, только сбор путей;
-  • scan_destination(file_list=..., on_progress=...) —
-    итерация по готовому списку с отчётом о каждом файле.
-
-Возвращаемый StateData содержит kind="" и source="" — их
-заполняет вызывающий код (copy/restore). summary уже заполнен:
-files_count, empty_dirs_count, total_size. Поля new_blobs_count /
-new_blobs_bytes равны 0 — их выставляет вызывающий после
-пополнения blob-пула.
+Поддержка длинных путей: обход через long_io.walk, stat через
+long_io.stat, хэш через hash_file (внутри long_io).
 """
 
 from __future__ import annotations
@@ -28,8 +9,9 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from datetime import datetime
-from pathlib import Path
 
+from core import long_io
+from core.paths import to_long_path
 from services.copy_constants import (
     STATE_VERSION,
     is_special_first_segment,
@@ -52,24 +34,16 @@ __all__ = [
 ]
 
 
-# --- Публичное ---
-
 def list_user_files(destination: str) -> list[str]:
-    """Быстрый обход: относительные пути user-файлов.
-
-    Без чтения содержимого, без хэширования. Используется
-    вызывающим для оценки total прогресса.
-    """
+    """Быстрый обход: относительные пути user-файлов."""
     if not destination:
         return []
-    base = Path(destination)
-    if not base.is_dir():
-        return []
 
+    top = to_long_path(destination)
     result: list[str] = []
     try:
-        for root, dirs, names in os.walk(destination):
-            rel_root = os.path.relpath(root, destination)
+        for root, dirs, names in long_io.walk(top):
+            rel_root = os.path.relpath(root, top)
             if rel_root == ".":
                 dirs[:] = [
                     d for d in dirs
@@ -83,7 +57,7 @@ def list_user_files(destination: str) -> list[str]:
             ]
             for name in names:
                 full = os.path.join(root, name)
-                rel = os.path.relpath(full, destination)
+                rel = os.path.relpath(full, top)
                 first = rel.split(os.sep, 1)[0]
                 if is_special_first_segment(first):
                     continue
@@ -100,19 +74,12 @@ def scan_destination(
     file_list: list[str] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> StateData:
-    """Строит StateData по текущему содержимому destination.
-
-    file_list — заранее собранный список путей. Если не передан,
-    вызывается list_user_files() (без прогресса по сбору).
-
-    on_progress(processed, total) — вызывается по каждому
-    обработанному файлу. total = len(file_list).
-    """
+    """Строит StateData по текущему содержимому destination."""
     if not destination:
         return _empty_state()
 
-    base = Path(destination)
-    if not base.is_dir():
+    top = to_long_path(destination)
+    if not long_io.isdir(top):
         logger.debug(
             "scan_destination: не директория %r", destination,
         )
@@ -125,7 +92,7 @@ def scan_destination(
     files: list[StateFile] = []
 
     for idx, rel in enumerate(file_list, 1):
-        full = os.path.join(destination, rel)
+        full = os.path.join(top, rel)
 
         st = _stat_safe(full)
         if st is not None:
@@ -185,15 +152,15 @@ def _empty_state() -> StateData:
 
 
 def _list_empty_dirs(destination: str) -> list[str]:
-    """Пустые директории destination (без файлов и подкаталогов).
+    """Пустые директории destination (без файлов и подкаталогов)."""
+    if not destination:
+        return []
 
-    Обход отдельный от обхода файлов — семантика «пустая =
-    нет файлов и нет подкаталогов» сохраняется.
-    """
+    top = to_long_path(destination)
     result: list[str] = []
     try:
-        for root, dirs, names in os.walk(destination):
-            rel_root = os.path.relpath(root, destination)
+        for root, dirs, names in long_io.walk(top):
+            rel_root = os.path.relpath(root, top)
             had_dirs = bool(dirs)
             had_names = bool(names)
 
@@ -223,7 +190,7 @@ def _list_empty_dirs(destination: str) -> list[str]:
 
 def _stat_safe(path: str) -> os.stat_result | None:
     try:
-        return os.stat(path)
+        return long_io.stat(path)
     except OSError as exc:
         logger.debug("stat %s: %r", path, exc)
         return None

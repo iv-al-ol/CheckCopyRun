@@ -11,18 +11,21 @@ stat без чтения, если ничего не менялось.
 
 При enabled=False — все публичные методы no-op: put не пополняет
 _entries, save не пишет файл, load не читает.
+
+Поддержка длинных путей Windows: чтение файла через
+long_io.open, запись кэша через long_io.open / long_io.replace.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from config.constants import HASH_CACHE_ALGORITHM
+from core import long_io
 from services.copy_constants import (
     CCRUN_DIR_NAME,
     HASH_CACHE_FILENAME,
@@ -49,7 +52,7 @@ def hash_file(
 ) -> str:
     """Потоковый хэш файла. Возвращает hex digest."""
     h = hashlib.new(algorithm)
-    with open(path, "rb") as f:
+    with long_io.open(path, "rb") as f:
         while True:
             chunk = f.read(_CHUNK_SIZE)
             if not chunk:
@@ -89,13 +92,13 @@ class HashCache:
             return
 
         path = self._path()
-        if not path.is_file():
+        if not long_io.isfile(str(path)):
             logger.debug("Кэш хэшей отсутствует: %s", path)
             return
 
         try:
-            raw = path.read_text(encoding="utf-8")
-            data = json.loads(raw)
+            with long_io.open(str(path), "r", encoding="utf-8") as f:
+                data = json.load(f)
         except Exception as exc:
             logger.warning(
                 "Не удалось прочитать кэш %s: %r", path, exc,
@@ -148,7 +151,7 @@ class HashCache:
 
         path = self._path()
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            long_io.makedirs(str(path.parent), exist_ok=True)
         except OSError as exc:
             logger.error(
                 "Не удалось создать %s: %r", path.parent, exc,
@@ -174,9 +177,9 @@ class HashCache:
 
         tmp = str(path) + TMP_SUFFIX
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
+            with long_io.open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, str(path))
+            long_io.replace(tmp, str(path))
             logger.debug(
                 "Кэш хэшей сохранён: %d записей", len(self._entries),
             )
@@ -184,12 +187,10 @@ class HashCache:
         except Exception as exc:
             logger.error("Не удалось сохранить кэш %s: %r", path, exc)
             try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
+                if long_io.exists(tmp):
+                    long_io.remove(tmp)
             except OSError as cleanup_exc:
-                logger.debug(
-                    "cleanup %s: %r", tmp, cleanup_exc,
-                )
+                logger.debug("cleanup %s: %r", tmp, cleanup_exc)
 
     def get(self, rel_path: str) -> CacheEntry | None:
         if not self._enabled:

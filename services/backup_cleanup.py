@@ -1,31 +1,15 @@
 """Политика хранения состояний + GC blob-ов.
 
-Настройки — глобальные (AppSettings). Применяются к destination
-каждого профиля отдельно: у каждого свои states и свой blob-pool.
-
-Правила:
-  • keep_last: оставить N самых свежих состояний, остальные
-    удалить.
-  • delete_older_than_days: удалить состояния старше X дней.
-  • Если оба включены — удаление происходит, если сработало
-    любое из условий (что наступит раньше).
-  • Текущее состояние (по current.json) НИКОГДА не удаляется.
-  • Restore_point (точка возврата) удаляется по общим правилам —
-    он обычный state.
-
-После удаления states — GC blob-ов: собираем sha256 из всех
-оставшихся state-файлов, удаляем blob-ы, не входящие в этот
-набор. Без GC blob-pool только растёт.
-
-Ошибки удаления (папка занята, нет прав) — warning в лог.
-Копирование не блокируется.
+Поддержка длинных путей: remove через long_io.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 
+from core import long_io
 from services.backup_registry import collect_keep_hashes
 from services.blob_store import BlobStore
 from services.current_pointer import CurrentPointer
@@ -44,8 +28,6 @@ __all__ = [
     "cleanup_states",
 ]
 
-
-# --- Политика ---
 
 @dataclass
 class CleanupPolicy:
@@ -75,22 +57,14 @@ class CleanupResult:
         return len(self.deleted)
 
 
-# --- Очистка ---
-
 def cleanup_states(
     destination: str,
     policy: CleanupPolicy,
 ) -> CleanupResult:
-    """Удаляет states по политике + делает GC blob-ов.
-
-    Возвращает CleanupResult. Ошибки удаления — warning,
-    копирование не блокируется.
-    """
     result = CleanupResult()
 
     if not policy.is_active:
         return result
-
     if not destination:
         return result
 
@@ -113,12 +87,10 @@ def cleanup_states(
     to_delete: set[Path] = set()
     names_to_delete: set[str] = set()
 
-    # Правило 1: оставить N самых свежих + текущее.
     if (
         policy.keep_last_enabled
         and policy.keep_last_n >= 0
     ):
-        # Свежие сначала (states уже отсортированы).
         keepers = set()
         for info in states[: policy.keep_last_n]:
             keepers.add(info.path)
@@ -133,7 +105,6 @@ def cleanup_states(
             to_delete.add(info.path)
             names_to_delete.add(info.path.name)
 
-    # Правило 2: удалить старше X дней.
     if (
         policy.delete_older_enabled
         and policy.delete_older_days >= 0
@@ -151,19 +122,17 @@ def cleanup_states(
             to_delete.add(info.path)
             names_to_delete.add(info.path.name)
 
-    # Защита текущего (даже если политика его выбрала).
     if current_name:
         to_delete = {
             p for p in to_delete if p.name != current_name
         }
         names_to_delete.discard(current_name)
 
-    # Удаляем.
     for info in states:
         if info.path not in to_delete:
             continue
         try:
-            info.path.unlink()
+            long_io.remove(str(info.path))
             result.deleted.append(info.path.name)
             logger.info(
                 "Удалено состояние по политике: %s",
@@ -176,7 +145,6 @@ def cleanup_states(
                 info.path.name, exc,
             )
 
-    # GC blob-ов.
     if result.deleted:
         try:
             keep = collect_keep_hashes(
@@ -193,8 +161,6 @@ def cleanup_states(
                     deleted, freed,
                 )
         except Exception as exc:
-            logger.warning(
-                "GC blob-ов упал: %r", exc,
-            )
+            logger.warning("GC blob-ов упал: %r", exc)
 
     return result

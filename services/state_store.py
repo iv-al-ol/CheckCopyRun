@@ -3,31 +3,19 @@
 Каждое состояние — JSON-файл в <destination>/!CCRun/states/:
   state_<YYYY.MM.DD_HH.MM.SS.mmm>.json
 
-Содержимое:
-  • version        — версия формата;
-  • created_at     — ISO 8601 с миллисекундами;
-  • kind           — initial | auto | restore_point;
-  • source         — путь к папке-источнику;
-  • files          — полный список файлов: path, sha256, size, mtime;
-  • empty_dirs     — пустые директории (без файлов и подкаталогов);
-  • summary        — агрегаты для UI: files_count, empty_dirs_count,
-                     total_size, new_blobs_count, new_blobs_bytes.
-
-Полный список (не diff) — простота важнее размера: ~200 байт
-на файл. Для 10 000 файлов ≈ 2 МБ на состояние.
-
-Файлы состояний атомарны: пишутся в .tmp и переименовываются.
+Поддержка длинных путей Windows: все I/O через long_io.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from core import long_io
+from core.paths import to_long_path
 from services.copy_constants import (
     CCRUN_DIR_NAME,
     STATE_FILE_PREFIX,
@@ -149,11 +137,12 @@ class StateStore:
     """Управляет state-файлами одного destination."""
 
     def __init__(self, destination: str | Path):
-        self._root = (
+        raw = (
             Path(destination) / CCRUN_DIR_NAME / STATES_DIR_NAME
         )
+        self._root = Path(to_long_path(str(raw)))
         try:
-            self._root.mkdir(parents=True, exist_ok=True)
+            long_io.makedirs(str(self._root), exist_ok=True)
         except OSError as exc:
             raise StateStoreError(
                 f"Не удалось создать {self._root}: {exc}"
@@ -178,11 +167,11 @@ class StateStore:
 
         tmp = str(path) + TMP_SUFFIX
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
+            with long_io.open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, str(path))
+            long_io.replace(tmp, str(path))
         except OSError as exc:
-            _safe_unlink(Path(tmp))
+            _safe_unlink(tmp)
             raise StateStoreError(
                 f"Не удалось записать {path}: {exc}"
             ) from exc
@@ -198,13 +187,13 @@ class StateStore:
     def load(self, ref: str | Path) -> StateData:
         """Загружает полные данные состояния по пути или имени."""
         path = self._resolve(ref)
-        if not path.is_file():
+        if not long_io.isfile(str(path)):
             raise StateStoreError(
                 f"Файл состояния не найден: {path}"
             )
         try:
-            raw = path.read_text(encoding="utf-8")
-            payload = json.loads(raw)
+            with long_io.open(str(path), "r", encoding="utf-8") as f:
+                payload = json.load(f)
         except Exception as exc:
             raise StateStoreError(
                 f"Не удалось прочитать {path}: {exc}"
@@ -215,7 +204,7 @@ class StateStore:
         """Все состояния, свежие сначала."""
         result: list[StateInfo] = []
         try:
-            entries = list(self._root.iterdir())
+            entries = list(long_io.scandir(str(self._root)))
         except OSError as exc:
             logger.warning(
                 "Не удалось прочитать %s: %r", self._root, exc,
@@ -242,8 +231,8 @@ class StateStore:
                 continue
 
             result.append(StateInfo(
-                path=entry,
-                name=entry.stem,
+                path=Path(entry.path),
+                name=Path(entry.name).stem,
                 timestamp=ts,
                 data=data,
             ))
@@ -274,10 +263,10 @@ class StateStore:
 
     def delete(self, ref: str | Path) -> bool:
         path = self._resolve(ref)
-        if not path.is_file():
+        if not long_io.isfile(str(path)):
             return False
         try:
-            path.unlink()
+            long_io.remove(str(path))
             logger.debug("Удалено состояние: %s", path.name)
             return True
         except OSError as exc:
@@ -294,11 +283,11 @@ class StateStore:
         ms = now.microsecond // 1000
         stem = f"{STATE_FILE_PREFIX}{base}.{ms:03d}"
         name = f"{stem}.json"
-        if not (self._root / name).exists():
+        if not long_io.exists(str(self._root / name)):
             return name
         for i in range(1, 10_000):
             alt = f"{stem}_{i}.json"
-            if not (self._root / alt).exists():
+            if not long_io.exists(str(self._root / alt)):
                 return alt
         raise StateStoreError(
             "Не удалось подобрать имя для состояния"
@@ -397,9 +386,9 @@ def _timestamp_from_match(m: re.Match) -> datetime | None:
         return None
 
 
-def _safe_unlink(path: Path) -> None:
+def _safe_unlink(path: str) -> None:
     try:
-        if path.exists():
-            path.unlink()
+        if long_io.exists(path):
+            long_io.remove(path)
     except OSError:
         pass

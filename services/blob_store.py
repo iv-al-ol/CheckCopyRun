@@ -10,15 +10,18 @@ sha256 (64 hex-символа), подкаталог = первые 2 симво
 
 Blob-ы неизменяемы после создания. Удаляются только через gc()
 по результатам сверки с набором используемых хэшей.
+
+Поддержка длинных путей Windows: все I/O через long_io.
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
+from core import long_io
+from core.paths import to_long_path
 from services.copy_constants import (
     BLOB_CHUNK_SIZE,
     BLOB_HASH_ALGORITHM,
@@ -47,10 +50,10 @@ class BlobHashMismatch(BlobError):
     """Хэш фактического содержимого не совпал с ожидаемым."""
 
 
-def _safe_unlink(path: Path) -> None:
+def _safe_unlink(path: str) -> None:
     try:
-        if path.exists():
-            path.unlink()
+        if long_io.exists(path):
+            long_io.remove(path)
     except OSError as exc:
         logger.debug("Не удалось удалить %s: %r", path, exc)
 
@@ -59,11 +62,12 @@ class BlobStore:
     """Хранилище уникальных файлов по sha256."""
 
     def __init__(self, destination: str | Path):
-        self._root = (
+        raw = (
             Path(destination) / CCRUN_DIR_NAME / BLOBS_DIR_NAME
         )
+        self._root = Path(to_long_path(str(raw)))
         try:
-            self._root.mkdir(parents=True, exist_ok=True)
+            long_io.makedirs(str(self._root), exist_ok=True)
         except OSError as exc:
             raise BlobError(
                 f"Не удалось создать {self._root}: {exc}"
@@ -81,49 +85,47 @@ class BlobStore:
     def has(self, sha256: str) -> bool:
         if not _is_sha256(sha256):
             return False
-        return self.path_for(sha256).is_file()
+        return long_io.isfile(
+            str(self.path_for(sha256)),
+        )
 
     def get(self, sha256: str) -> Path | None:
         """Путь к blob-у или None."""
         if not _is_sha256(sha256):
             return None
         p = self.path_for(sha256)
-        return p if p.is_file() else None
+        return p if long_io.isfile(str(p)) else None
 
     def put(
         self,
         src_path: str | Path,
         sha256: str,
     ) -> bool:
-        """Копирует файл в pool. Возвращает True, если blob новый.
-
-        Содержимое верифицируется по sha256 во время копирования.
-        Если уже есть blob с таким хэшем — ничего не делает
-        и возвращает False.
-        """
+        """Копирует файл в pool. Возвращает True, если blob новый."""
         if not _is_sha256(sha256):
             raise BlobHashMismatch(
                 f"Некорректный sha256: {sha256!r}"
             )
 
         target = self.path_for(sha256)
-        if target.is_file():
+        if long_io.isfile(str(target)):
             return False
 
-        target_dir = target.parent
         try:
-            target_dir.mkdir(parents=True, exist_ok=True)
+            long_io.makedirs(
+                str(target.parent), exist_ok=True,
+            )
         except OSError as exc:
             raise BlobError(
-                f"Не удалось создать {target_dir}: {exc}"
+                f"Не удалось создать {target.parent}: {exc}"
             ) from exc
 
-        tmp = Path(str(target) + TMP_SUFFIX)
+        tmp = str(target) + TMP_SUFFIX
         _safe_unlink(tmp)
 
         h = hashlib.new(BLOB_HASH_ALGORITHM)
         try:
-            with open(src_path, "rb") as src, open(
+            with long_io.open(src_path, "rb") as src, long_io.open(
                 tmp, "wb",
             ) as dst:
                 while True:
@@ -147,7 +149,7 @@ class BlobStore:
             )
 
         try:
-            os.replace(str(tmp), str(target))
+            long_io.replace(tmp, str(target))
         except OSError as exc:
             _safe_unlink(tmp)
             raise BlobError(
@@ -156,23 +158,23 @@ class BlobStore:
 
         logger.debug(
             "Добавлен blob: %s (%d байт)",
-            sha256[:12], target.stat().st_size,
+            sha256[:12], long_io.getsize(str(target)),
         )
         return True
 
     def iter_all(self) -> Iterator[tuple[str, Path]]:
         """Все blob-ы: (sha256, path)."""
-        for sub in self._root.iterdir():
+        for sub in long_io.scandir(str(self._root)):
             if not sub.is_dir():
                 continue
-            for blob in sub.iterdir():
+            for blob in long_io.scandir(sub.path):
                 if not blob.is_file():
                     continue
                 if blob.name.endswith(TMP_SUFFIX):
                     continue
                 if not _is_sha256(blob.name):
                     continue
-                yield blob.name, blob
+                yield blob.name, Path(blob.path)
 
     def stats(self) -> tuple[int, int]:
         """(количество blob-ов, суммарный размер в байтах)."""
@@ -180,37 +182,33 @@ class BlobStore:
         total = 0
         for _, p in self.iter_all():
             try:
-                total += p.stat().st_size
+                total += long_io.getsize(str(p))
                 count += 1
             except OSError:
                 continue
         return count, total
 
     def gc(self, keep: Iterable[str]) -> tuple[int, int]:
-        """Удаляет blob-ы, не входящие в keep.
-
-        Возвращает (удалено файлов, освобождено байт).
-        Пустые подкаталоги тоже убираются.
-        """
+        """Удаляет blob-ы, не входящие в keep."""
         keep_set = set(keep)
         deleted = 0
         bytes_freed = 0
 
-        for sub in list(self._root.iterdir()):
+        for sub in list(long_io.scandir(str(self._root))):
             if not sub.is_dir():
                 continue
 
-            for blob in list(sub.iterdir()):
+            for blob in list(long_io.scandir(sub.path)):
                 if not blob.is_file():
                     continue
                 if blob.name.endswith(TMP_SUFFIX):
-                    _safe_unlink(blob)
+                    _safe_unlink(blob.path)
                     continue
                 if blob.name in keep_set:
                     continue
                 try:
-                    size = blob.stat().st_size
-                    blob.unlink()
+                    size = long_io.getsize(blob.path)
+                    long_io.remove(blob.path)
                     deleted += 1
                     bytes_freed += size
                     logger.debug(
@@ -220,12 +218,12 @@ class BlobStore:
                 except OSError as exc:
                     logger.warning(
                         "GC: не удалось удалить %s: %r",
-                        blob, exc,
+                        blob.path, exc,
                     )
 
             try:
-                if not any(sub.iterdir()):
-                    sub.rmdir()
+                if not long_io.listdir(sub.path):
+                    long_io.rmdir(sub.path)
             except OSError:
                 pass
 

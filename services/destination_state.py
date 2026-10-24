@@ -1,21 +1,7 @@
 """Метка текущей версии destination для UI.
 
-Использует CAS: current.json + state-файлы. Собственного файла
-destination_state.json больше нет — нужная информация уже в
-current.json (last_action, last_action_at, state, restored_from)
-и в state-файлах (created_at, files с mtime и sha256).
-
-Manual-edit detection (один проход):
-  • для каждого файла state сравниваем mtime из state с
-    фактическим mtime файла (допуск 10 мс);
-  • файл в destination, которого нет в state → редактирование;
-  • файл из state, которого нет в destination → редактирование.
-
-После первого обнаруженного отличия сравнение mtime
-прекращается (edited=True), но обход продолжается — чтобы
-собрать latest_mtime для метки «изменена вручную». Это
-устраняет второй проход, который раньше был нужен для
-_latest_file_mtime.
+Поддержка длинных путей: обход через long_io.walk, stat через
+long_io.stat.
 """
 
 from __future__ import annotations
@@ -24,12 +10,14 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+from core import long_io
+from core.paths import to_long_path
 from services.blob_store import BlobStore
 from services.copy_constants import (
     STATE_KIND_AUTO,
     is_special_first_segment,
 )
-from services.current_pointer import CurrentPointer
+from services.current_pointer import CurrentData, CurrentPointer
 from services.state_scanner import scan_destination
 from services.state_store import (
     StateData,
@@ -42,24 +30,22 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 _LABEL_DATETIME_FMT = "%d.%m.%Y %H:%M:%S"
+_LABEL_PREFIX = "Текущая версия от"
+_LABEL_SEP = " — "
 
-# Допуск на сравнение mtime: 10 мс. ISO-сериализация времени
-# обрезает до миллисекунд — теряется максимум 1 мс.
 _MTIME_TOLERANCE_NS = 10_000_000
 
 
 def now_iso() -> str:
-    """Текущее время в ISO 8601 с миллисекундами."""
     return datetime.now().isoformat(timespec="milliseconds")
 
 
 # --- Сохранение (совместимость и для тестов) ---
 
 def save_after_copy(destination: str) -> None:
-    """Создаёт state и обновляет current."""
     if not destination:
         return
-    if not Path(destination).is_dir():
+    if not long_io.isdir(str(destination)):
         return
 
     try:
@@ -68,15 +54,15 @@ def save_after_copy(destination: str) -> None:
         data.source = ""
 
         blobs = BlobStore(destination)
-        base = Path(destination)
+        base = to_long_path(destination)
         new_count = 0
         new_bytes = 0
         for f in data.files:
-            full = base / f.path
-            if not full.is_file():
+            full = os.path.join(base, f.path)
+            if not long_io.isfile(full):
                 continue
             try:
-                if blobs.put(str(full), f.sha256):
+                if blobs.put(full, f.sha256):
                     new_count += 1
                     new_bytes += f.size
             except Exception as exc:
@@ -96,10 +82,9 @@ def save_after_copy(destination: str) -> None:
 def save_after_restore(
     destination: str, backup_dir: str,
 ) -> None:
-    """Обновляет current: last_action=restore."""
     if not destination:
         return
-    if not Path(destination).is_dir():
+    if not long_io.isdir(str(destination)):
         return
 
     try:
@@ -127,8 +112,7 @@ def save_after_restore(
 # --- Метка версии ---
 
 def build_label(destination: str) -> str:
-    """Строка для UI. Пустая — если destination не задан/нет."""
-    if not destination or not Path(destination).is_dir():
+    if not destination or not long_io.isdir(str(destination)):
         return ""
 
     cur = CurrentPointer(destination).load()
@@ -138,7 +122,7 @@ def build_label(destination: str) -> str:
         if latest is None:
             return "Версия не определена"
         return (
-            f"Текущая версия файлов от "
+            f"{_LABEL_PREFIX} "
             f"{latest.strftime(_LABEL_DATETIME_FMT)}"
         )
 
@@ -146,7 +130,7 @@ def build_label(destination: str) -> str:
         store = StateStore(destination)
         state = store.load(cur.state)
     except StateStoreError as exc:
-        logger.debug(
+        logger.warning(
             "build_label: state %r не загружен: %r",
             cur.state, exc,
         )
@@ -154,58 +138,93 @@ def build_label(destination: str) -> str:
         if latest is None:
             return "Версия не определена"
         return (
-            f"Текущая версия файлов от "
+            f"{_LABEL_PREFIX} "
             f"{latest.strftime(_LABEL_DATETIME_FMT)}"
         )
 
     edited, latest = _scan_vs_state(destination, state)
 
+    if not edited and not state.files and not state.empty_dirs:
+        return "Папка пуста"
+
+    dt = _label_datetime(
+        cur, state, edited=edited, latest=latest,
+    )
+    suffix = _suffix_for_action(
+        cur.last_action or "", edited=edited,
+    )
+
+    if dt is None:
+        if suffix:
+            return f"Текущая версия{_LABEL_SEP}{suffix}"
+        return "Версия не определена"
+
+    base = f"{_LABEL_PREFIX} {dt.strftime(_LABEL_DATETIME_FMT)}"
+    if suffix:
+        return f"{base}{_LABEL_SEP}{suffix}"
+    return base
+
+
+# --- Дата для метки ---
+
+def _label_datetime(
+    cur: CurrentData,
+    state: StateData,
+    *,
+    edited: bool,
+    latest: datetime | None,
+) -> datetime | None:
     if edited:
         if latest is not None:
-            return (
-                f"Текущая версия изменена вручную "
-                f"({latest.strftime(_LABEL_DATETIME_FMT)})"
-            )
-        return "Текущая версия изменена вручную"
+            return latest
+        return _parse_iso(state.created_at)
 
-    if cur.last_action == "restore":
-        try:
-            created = datetime.fromisoformat(
-                state.created_at,
-            )
-        except (ValueError, TypeError):
-            created = None
-        if created is not None:
-            return (
-                f"Текущая версия файлов от "
-                f"{created.strftime(_LABEL_DATETIME_FMT)} "
-                f"(восстановлена резервная копия)"
-            )
-        return "Текущая версия — восстановленная копия"
+    if cur.last_action in ("restore", "rollback"):
+        return _parse_iso(state.created_at)
 
+    if cur.last_action_at:
+        dt = _parse_iso(cur.last_action_at)
+        if dt is not None:
+            return dt
+
+    return _parse_iso(state.created_at)
+
+
+def _suffix_for_action(
+    last_action: str, *, edited: bool,
+) -> str:
+    if edited:
+        if last_action == "restore":
+            return (
+                "изменено вручную после восстановления "
+                "из бэкапа"
+            )
+        if last_action == "rollback":
+            return "изменено вручную после отката"
+        return "изменено вручную"
+
+    if last_action == "restore":
+        return "восстановлено из бэкапа"
+    if last_action == "rollback":
+        return "откат после отмены"
+    return ""
+
+
+def _parse_iso(s: str) -> datetime | None:
+    if not s:
+        return None
     try:
-        act = datetime.fromisoformat(cur.last_action_at)
+        return datetime.fromisoformat(s)
     except (ValueError, TypeError):
-        act = None
-    if act is not None:
-        return (
-            f"Текущая версия файлов от "
-            f"{act.strftime(_LABEL_DATETIME_FMT)}"
-        )
-    return "Версия не определена"
+        return None
 
 
-# --- Один проход: сравнение с state + latest mtime ---
+# --- Один проход ---
 
 def _scan_vs_state(
     destination: str, state: StateData,
 ) -> tuple[bool, datetime | None]:
-    """Один проход по destination.
-
-    Возвращает (edited, latest_mtime). После первого
-    обнаруженного отличия сравнение mtime прекращается, но
-    обход продолжается — чтобы собрать latest для метки.
-    """
+    top = to_long_path(destination)
     state_map: dict[str, StateFile] = {
         _norm(f.path): f for f in state.files
     }
@@ -213,8 +232,8 @@ def _scan_vs_state(
     edited = False
 
     try:
-        for root, dirs, names in os.walk(destination):
-            rel_root = os.path.relpath(root, destination)
+        for root, dirs, names in long_io.walk(top):
+            rel_root = os.path.relpath(root, top)
             if rel_root == ".":
                 dirs[:] = [
                     d for d in dirs
@@ -222,14 +241,12 @@ def _scan_vs_state(
                 ]
             for name in names:
                 full = os.path.join(root, name)
-                rel = _norm(
-                    os.path.relpath(full, destination)
-                )
+                rel = _norm(os.path.relpath(full, top))
                 first = rel.split("/", 1)[0]
                 if is_special_first_segment(first):
                     continue
                 try:
-                    st = os.stat(full)
+                    st = long_io.stat(full)
                 except OSError:
                     continue
 
@@ -247,13 +264,8 @@ def _scan_vs_state(
                 if not sf.mtime:
                     continue
 
-                try:
-                    expected_ns = int(
-                        datetime.fromisoformat(
-                            sf.mtime,
-                        ).timestamp() * 1_000_000_000
-                    )
-                except (ValueError, TypeError, OSError):
+                expected_ns = _to_ns(sf.mtime)
+                if expected_ns is None:
                     continue
 
                 if (
@@ -265,7 +277,6 @@ def _scan_vs_state(
         logger.debug("_scan_vs_state: %r", exc)
         return True, _latest_file_mtime(destination)
 
-    # Файлы state, которых нет в destination.
     if not edited and state_map:
         edited = True
 
@@ -281,36 +292,40 @@ def _scan_vs_state(
     return edited, latest
 
 
-# --- Fallback: mtime самого свежего файла ---
+def _to_ns(iso: str) -> int | None:
+    try:
+        dt = datetime.fromisoformat(iso)
+        return int(dt.timestamp() * 1_000_000_000)
+    except (ValueError, TypeError, OSError):
+        return None
+
 
 def _latest_file_mtime(
     destination: str,
 ) -> datetime | None:
-    """mtime самого свежего user-файла в destination."""
-    base = Path(destination)
-    if not base.is_dir():
+    if not destination:
+        return None
+    top = to_long_path(destination)
+    if not long_io.isdir(top):
         return None
 
     latest_ns = 0
     try:
-        for root, dirs, files in os.walk(destination):
-            rel_root = os.path.relpath(root, destination)
+        for root, dirs, files in long_io.walk(top):
+            rel_root = os.path.relpath(root, top)
             if rel_root == ".":
                 dirs[:] = [
                     d for d in dirs
                     if not is_special_first_segment(d)
                 ]
             for name in files:
-                rel = os.path.relpath(
-                    os.path.join(root, name), destination,
-                )
+                full = os.path.join(root, name)
+                rel = os.path.relpath(full, top)
                 first = rel.split(os.sep, 1)[0]
                 if is_special_first_segment(first):
                     continue
                 try:
-                    st = os.stat(
-                        os.path.join(root, name),
-                    )
+                    st = long_io.stat(full)
                 except OSError:
                     continue
                 if st.st_mtime_ns > latest_ns:

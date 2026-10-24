@@ -1,35 +1,17 @@
 """Указатель на текущее состояние destination.
 
-Файл: <destination>/!CCRun/current.json.
-
-Содержимое:
-  • version        — версия формата;
-  • state          — имя state-файла (без пути), содержимое
-                     которого совпадает с текущим destination;
-  • last_action    — "copy" | "restore" | "initial";
-  • last_action_at — ISO 8601 с миллисекундами, время завершения
-                     последнего copy/restore;
-  • restored_from  — при last_action="restore": имя state,
-                     к которому восстановили.
-
-Используется:
-  • copy_service — чтобы понять, изменилось ли состояние
-    с прошлого раза (не создавать лишних states);
-  • restore_service — чтобы знать, что было до restore
-    (для «точки возврата»);
-  • UI — метка «Текущая версия файлов от …» и «Текущий» в
-    списке состояний.
-
-Файл маленький (~200 байт), пишется атомарно через .tmp.
+Файл: <destination>/!CCRun/current.json. Поддержка длинных
+путей Windows: I/O через long_io.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from core import long_io
+from core.paths import to_long_path
 from services.copy_constants import (
     CCRUN_DIR_NAME,
     CURRENT_FILENAME,
@@ -66,8 +48,8 @@ class CurrentPointer:
     """Управляет current.json для одного destination."""
 
     def __init__(self, destination: str | Path):
-        self._root = Path(destination) / CCRUN_DIR_NAME
-        self._path = self._root / CURRENT_FILENAME
+        raw = Path(destination) / CCRUN_DIR_NAME / CURRENT_FILENAME
+        self._path = Path(to_long_path(str(raw)))
 
     @property
     def path(self) -> Path:
@@ -76,11 +58,13 @@ class CurrentPointer:
     # --- Чтение ---
 
     def load(self) -> CurrentData | None:
-        if not self._path.is_file():
+        if not long_io.isfile(str(self._path)):
             return None
         try:
-            raw = self._path.read_text(encoding="utf-8")
-            payload = json.loads(raw)
+            with long_io.open(
+                str(self._path), "r", encoding="utf-8",
+            ) as f:
+                payload = json.load(f)
         except Exception as exc:
             logger.warning(
                 "Не удалось прочитать %s: %r",
@@ -114,24 +98,26 @@ class CurrentPointer:
             data.version = CURRENT_VERSION
 
         try:
-            self._root.mkdir(parents=True, exist_ok=True)
+            long_io.makedirs(
+                str(self._path.parent), exist_ok=True,
+            )
         except OSError as exc:
             raise CurrentPointerError(
-                f"Не удалось создать {self._root}: {exc}"
+                f"Не удалось создать {self._path.parent}: {exc}"
             ) from exc
 
         tmp = str(self._path) + TMP_SUFFIX
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
+            with long_io.open(tmp, "w", encoding="utf-8") as f:
                 json.dump(
                     asdict(data), f,
                     ensure_ascii=False, indent=2,
                 )
-            os.replace(tmp, str(self._path))
+            long_io.replace(tmp, str(self._path))
         except OSError as exc:
             try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
+                if long_io.exists(tmp):
+                    long_io.remove(tmp)
             except OSError:
                 pass
             raise CurrentPointerError(
