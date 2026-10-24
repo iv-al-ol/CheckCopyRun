@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 
@@ -129,7 +130,8 @@ class MainWindow(ctk.CTk):
         self._build_router()
 
         self.refresh_sidebar()
-        self._restore_last_view()
+        # Всегда открываем «Главный» раздел при запуске.
+        self._on_sidebar_select(KEY_MAIN)
 
         self.startup_checker = StartupCheckQueue(
             window=self,
@@ -373,10 +375,16 @@ class MainWindow(ctk.CTk):
             return
 
         try:
-            img = Image.open(icon_path)
-            if img.mode != "RGBA":
-                img = img.convert("RGBA")
-            photo = ImageTk.PhotoImage(img)
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Image was not the expected size",
+                    category=UserWarning,
+                )
+                img = Image.open(icon_path)
+                if img.mode != "RGBA":
+                    img = img.convert("RGBA")
+                photo = ImageTk.PhotoImage(img)
             self.iconphoto(True, photo)
             self._icon_photo = photo
         except Exception as exc:
@@ -423,17 +431,6 @@ class MainWindow(ctk.CTk):
             "profile",
             lambda: ProfileView(content, self),
         )
-
-    def _restore_last_view(self) -> None:
-        key = self.settings.last_view or KEY_MAIN
-        pid = parse_profile_key(key)
-
-        if pid is not None and self.profile_actions.find(pid) is None:
-            key = KEY_MAIN
-        elif pid is None and key not in (KEY_MAIN, KEY_SETTINGS):
-            key = KEY_MAIN
-
-        self._on_sidebar_select(key)
 
     # --- Навигация ---
 
@@ -821,9 +818,6 @@ class MainWindow(ctk.CTk):
             if self.restore_service.is_running:
                 self.restore_service.cancel()
             self._save_geometry()
-            self.settings.last_view = (
-                self.router.current or KEY_MAIN
-            )
             save_settings(self.settings)
         except Exception as exc:
             logger.error("Ошибка сохранения при закрытии: %r", exc)

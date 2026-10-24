@@ -124,7 +124,6 @@ def _to_dict(s: AppSettings) -> dict:
         "theme": s.theme,
         "confirm_on_exit": s.confirm_on_exit,
         "window_geometry": s.window_geometry,
-        "last_view": s.last_view,
         "hash_cache_enabled": s.hash_cache_enabled,
         "run_autocheck_on_restored": s.run_autocheck_on_restored,
         "backup_keep_last_enabled": s.backup_keep_last_enabled,
@@ -158,7 +157,6 @@ def _from_dict(data: dict) -> AppSettings:
         theme=data.get("theme", THEME_DEFAULT),
         confirm_on_exit=bool(data.get("confirm_on_exit", False)),
         window_geometry=data.get("window_geometry", ""),
-        last_view=data.get("last_view", "main"),
         hash_cache_enabled=bool(
             data.get(
                 "hash_cache_enabled",

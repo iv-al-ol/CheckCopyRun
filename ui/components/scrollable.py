@@ -7,6 +7,10 @@
 Когда контент снова превышает видимую область — полоса возвращается
 тем же grid()/pack() без параметров: tkinter восстановит её по
 предыдущей позиции.
+
+Дополнительно: ширина внутреннего фрейма принудительно
+синхронизируется с шириной canvas, чтобы избежать горизонтальной
+прокрутки и обеспечить правильный перенос WrappingLabel.
 """
 
 import customtkinter as ctk
@@ -70,7 +74,6 @@ class AutoHideScrollableFrame(ctk.CTkScrollableFrame):
     # --- Управление видимостью ---
 
     def _set_scrollbar_hidden(self, hidden: bool) -> None:
-        """Скрывает/показывает полосу через grid_remove/pack_forget."""
         if hidden == self._hidden:
             return
 
@@ -124,6 +127,14 @@ class AutoHideScrollableFrame(ctk.CTkScrollableFrame):
         self._update()
 
     def _on_configure(self, event=None) -> None:
+        # Принудительно выравниваем ширину внутреннего фрейма
+        # по ширине canvas, чтобы избежать горизонтальной прокрутки
+        # и обеспечить правильный перенос WrappingLabel.
+        if event is not None and event.widget is self._parent_canvas:
+            try:
+                self.configure(width=event.width)
+            except Exception:
+                pass
         self._schedule_settle(immediate=False)
 
     def _schedule_settle(self, immediate: bool) -> None:

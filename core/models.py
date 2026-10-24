@@ -37,9 +37,6 @@ class Profile:
     run_after_copy: bool = False
     check_on_startup: bool = False
 
-    # Режим зеркала: файлы и папки в destination, которых нет
-    # в source, удаляются. CAS-состояния создаются принудительно,
-    # даже если create_backup=False, — иначе потери безвозвратны.
     mirror_mode: bool = False
 
     pinned: bool = False
@@ -117,13 +114,8 @@ class AppSettings:
     theme: str = "dark"
     confirm_on_exit: bool = False
     window_geometry: str = ""
-    last_view: str = "main"
     hash_cache_enabled: bool = HASH_CACHE_ENABLED_DEFAULT
 
-    # Автопроверка при запуске для профилей, восстановленных
-    # из бэкапа. По умолчанию — False: такие профили
-    # пропускаются, чтобы не перезаписать восстановленные
-    # файлы новыми из источника.
     run_autocheck_on_restored: bool = False
 
     backup_keep_last_enabled: bool = False

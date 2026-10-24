@@ -1,7 +1,12 @@
-"""Иконка приложения icon.ico из папки assets/."""
+"""Иконка приложения icon.ico из папки assets/.
+
+Предупреждение PIL "Image was not the expected size" для
+нестандартных .ico — игнорируется локально.
+"""
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 from utils.logger import get_logger
@@ -32,12 +37,18 @@ def apply_window_icon(window) -> None:
 
     try:
         from PIL import Image, ImageTk
-        img = Image.open(icon_path)
-        if img.mode != "RGBA":
-            img = img.convert("RGBA")
-        photo = ImageTk.PhotoImage(img)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Image was not the expected size",
+                category=UserWarning,
+            )
+            img = Image.open(icon_path)
+            if img.mode != "RGBA":
+                img = img.convert("RGBA")
+            photo = ImageTk.PhotoImage(img)
         window.iconphoto(False, photo)
-        # держим ссылку, иначе GC соберёт картинку
         window._icon_photo_ref = photo
     except ImportError as exc:
         logger.debug("Pillow недоступен для iconphoto: %r", exc)

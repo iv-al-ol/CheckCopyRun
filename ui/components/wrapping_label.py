@@ -1,4 +1,15 @@
-"""CTkLabel с автоматическим переносом строк по ширине родителя."""
+"""CTkLabel с автоматическим переносом строк по ширине родителя.
+
+При создании мы напрямую задаём начальный wraplength внутреннему
+tkinter.Label. Без этого Label запрашивает ширину по всей длине
+текста, раздувает родителя (до 1000+ px), и текст выходит за
+пределы окна. CTkLabel не поддерживает wraplength на уровне
+фрейма, поэтому мы обращаемся напрямую к внутреннему _label.
+
+При <Configure> (изменение выделенной ширины) wraplength
+пересчитывается по self.winfo_width() — это фактическая
+ширина, выделенная grid/pack, с учётом sticky="ew".
+"""
 
 import customtkinter as ctk
 
@@ -8,6 +19,7 @@ logger = get_logger(__name__)
 
 _REFLOW_DELAY_MS = 30
 _MIN_WRAPLENGTH = 120
+_DEFAULT_WRAPLENGTH = 200
 
 
 class WrappingLabel(ctk.CTkLabel):
@@ -20,12 +32,20 @@ class WrappingLabel(ctk.CTkLabel):
         h_padding: int = 32,
         **kwargs,
     ):
+        # Удаляем wraplength из kwargs, чтобы он не попал в tkinter.Frame
+        # (CTkLabel не поддерживает его в конструкторе фрейма).
+        kwargs.pop("wraplength", None)
         kwargs.setdefault("anchor", "w")
         kwargs.setdefault("justify", "left")
         super().__init__(master, **kwargs)
 
         self._h_padding = h_padding
         self._reflow_job: str | None = None
+
+        # Задаём начальный wraplength напрямую в внутренний Label,
+        # чтобы он не запрашивал гигантскую ширину при первом рендере.
+        if hasattr(self, "_label"):
+            self._label.configure(wraplength=_DEFAULT_WRAPLENGTH)
 
         self.bind("<Configure>", self._on_configure)
 
@@ -44,22 +64,29 @@ class WrappingLabel(ctk.CTkLabel):
     def _apply_wraplength(self) -> None:
         self._reflow_job = None
 
-        try:
-            parent_width = self.master.winfo_width()
-        except Exception as exc:
-            logger.debug(
-                "не удалось получить ширину родителя: %r", exc,
-            )
-            return
+        width = self.winfo_width()
+        if width <= 1:
+            try:
+                width = self.master.winfo_width()
+            except Exception:
+                return
 
-        if parent_width <= 1:
+        if width <= 1:
             return
 
         wraplength = max(
-            _MIN_WRAPLENGTH, parent_width - self._h_padding,
+            _MIN_WRAPLENGTH, width - self._h_padding,
         )
 
+        # Проверка, чтобы не вызывать configure() без нужды
         try:
-            self.configure(wraplength=wraplength)
+            current = int(self._label.cget("wraplength"))
+            if current == wraplength:
+                return
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+        try:
+            self._label.configure(wraplength=wraplength)
         except Exception as exc:
             logger.debug("configure(wraplength) не удался: %r", exc)
