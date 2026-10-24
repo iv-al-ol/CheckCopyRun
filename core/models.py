@@ -117,6 +117,9 @@ class AppSettings:
     hash_cache_enabled: bool = HASH_CACHE_ENABLED_DEFAULT
 
     run_autocheck_on_restored: bool = False
+    minimize_to_tray: bool = False
+    autostart: bool = False
+    start_minimized: bool = False
 
     backup_keep_last_enabled: bool = False
     backup_keep_last_n: int = 10

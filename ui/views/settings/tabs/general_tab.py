@@ -1,10 +1,11 @@
-"""Вкладка «Общие»: тема, поведение, кэш хэшей, автопроверка."""
+"""Вкладка «Общие»: тема, система, поведение."""
 
 from __future__ import annotations
 
 import customtkinter as ctk
 
 from config.constants import THEME_DEFAULT
+from services import autostart
 from ui.components.option_menu import StyledOptionMenu
 from ui.components.wrapping_label import WrappingLabel
 from ui.fonts import get_font
@@ -64,35 +65,60 @@ class GeneralTab(SettingsTab):
             width=_OPTION_MENU_WIDTH,
         ).pack(side="left")
 
-        # --- "Поведение" ---
-        row = self._add_section_title(row, "Поведение")
+        # --- "Система" ---
+        row = self._add_section_title(row, "Система")
+
+        self._autostart_var = ctk.BooleanVar(value=False)
+        self._autostart_cb = ctk.CTkCheckBox(
+            self,
+            text="Запускать при старте Windows",
+            variable=self._autostart_var,
+            command=self._on_autostart_toggle,
+        )
+        self._autostart_cb.grid(
+            row=row, column=0, sticky="w",
+            padx=4, pady=(0, 8),
+        )
+        row += 1
+
+        self._start_minimized_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self,
+            text="Запускать свернутым",
+            variable=self._start_minimized_var,
+            command=self._on_start_minimized_toggle,
+        ).grid(
+            row=row, column=0, sticky="w",
+            padx=4, pady=(0, 8),
+        )
+        row += 1
+
+        self._minimize_to_tray_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self,
+            text="Сворачивать в системный трей при закрытии",
+            variable=self._minimize_to_tray_var,
+            command=self._on_minimize_to_tray_toggle,
+        ).grid(
+            row=row, column=0, sticky="w",
+            padx=4, pady=(0, 8),
+        )
+        row += 1
 
         self._confirm_exit_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             self,
-            text="Спрашивать подтверждение при закрытии приложения",
+            text="Спрашивать подтверждение при закрытии",
             variable=self._confirm_exit_var,
             command=self._on_confirm_exit_toggle,
         ).grid(
             row=row, column=0, sticky="w",
-            padx=4, pady=(0, 4),
-        )
-        row += 1
-
-        WrappingLabel(
-            self,
-            text=(
-                "Если включено, при попытке закрыть окно появится "
-                "запрос на подтверждение."
-            ),
-            text_color=("gray40", "gray60"),
-            font=get_font(_HINT_FONT_SIZE),
-            h_padding=_HINT_HPADDING,
-        ).grid(
-            row=row, column=0, sticky="ew",
             padx=4, pady=(0, _SECTION_PADY_BOTTOM),
         )
         row += 1
+
+        # --- "Поведение" ---
+        row = self._add_section_title(row, "Поведение")
 
         self._hash_cache_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
@@ -127,8 +153,8 @@ class GeneralTab(SettingsTab):
         ctk.CTkCheckBox(
             self,
             text=(
-                "Выполнять автопроверку при запуске "
-                "для профилей, восстановленных из бэкапа"
+                "Выполнять автопроверку для профилей, "
+                "где восстановлен бэкап"
             ),
             variable=self._autocheck_restored_var,
             command=self._on_autocheck_restored_toggle,
@@ -177,10 +203,16 @@ class GeneralTab(SettingsTab):
             THEME_LABELS.get(s.theme, THEME_LABELS["system"]),
         )
         self._confirm_exit_var.set(bool(s.confirm_on_exit))
+        self._minimize_to_tray_var.set(bool(s.minimize_to_tray))
+        self._autostart_var.set(bool(s.autostart))
+        self._start_minimized_var.set(bool(s.start_minimized))
         self._hash_cache_var.set(bool(s.hash_cache_enabled))
         self._autocheck_restored_var.set(
             bool(s.run_autocheck_on_restored)
         )
+
+        if not autostart.is_supported():
+            self._autostart_cb.configure(state="disabled")
 
     def on_show(self) -> None:
         self._sync_from_settings()
@@ -204,6 +236,33 @@ class GeneralTab(SettingsTab):
         self.window.save_settings_now()
         state = "включено" if enabled else "выключено"
         self.window.set_status(f"Подтверждение выхода {state}")
+
+    def _on_minimize_to_tray_toggle(self) -> None:
+        enabled = bool(self._minimize_to_tray_var.get())
+        self.window.settings.minimize_to_tray = enabled
+        self.window.save_settings_now()
+        state = "включено" if enabled else "выключено"
+        self.window.set_status(f"Сворачивание в трей {state}")
+
+    def _on_autostart_toggle(self) -> None:
+        enabled = bool(self._autostart_var.get())
+        success = autostart.set_enabled(enabled)
+
+        if success:
+            self.window.settings.autostart = enabled
+            self.window.save_settings_now()
+            state = "включён" if enabled else "выключен"
+            self.window.set_status(f"Автозапуск {state}")
+        else:
+            self._autostart_var.set(not enabled)
+            self.window.set_status("Ошибка настройки автозапуска")
+
+    def _on_start_minimized_toggle(self) -> None:
+        enabled = bool(self._start_minimized_var.get())
+        self.window.settings.start_minimized = enabled
+        self.window.save_settings_now()
+        state = "включён" if enabled else "выключен"
+        self.window.set_status(f"Запуск свернутым {state}")
 
     def _on_hash_cache_toggle(self) -> None:
         enabled = bool(self._hash_cache_var.get())

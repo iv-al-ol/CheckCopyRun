@@ -2,6 +2,8 @@
 
 Тонкий слой над setup_dialog + center_on_parent + bring_to_front.
 Все тексты центрированы, кнопки одинаковой ширины.
+Контейнер с кнопками имеет горизонтальный отступ (padx=32),
+чтобы даже при коротком тексте кнопки не прилипали к краям окна.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from ui.dialogs._setup import setup_dialog
 
 _WRAP = 380
 _BUTTON_WIDTH = 110
+_BUTTON_PADX = 32
 
 
 def _simple(
@@ -38,7 +41,7 @@ def _simple(
         justify="center",
         anchor="center",
         wraplength=_WRAP,
-    ).pack(padx=28, pady=(24, 16), fill="x")
+    ).pack(padx=32, pady=(24, 16), fill="x")
 
     StyledButton(
         dialog,
@@ -46,7 +49,7 @@ def _simple(
         variant=VARIANT_PRIMARY,
         width=_BUTTON_WIDTH,
         command=dialog.destroy,
-    ).pack(pady=(0, 20))
+    ).pack(pady=(0, 20), padx=_BUTTON_PADX)
 
     dialog.bind("<Escape>", lambda _e: dialog.destroy())
     dialog.bind("<Return>", lambda _e: dialog.destroy())
@@ -104,7 +107,7 @@ def ask_yes_no(
     ).pack(padx=32, pady=(24, 16), fill="x")
 
     btns = ctk.CTkFrame(dialog, fg_color="transparent")
-    btns.pack(pady=(0, 20))
+    btns.pack(pady=(0, 20), padx=_BUTTON_PADX)
 
     def on_yes():
         result["value"] = True

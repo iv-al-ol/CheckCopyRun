@@ -9,6 +9,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from config.constants import (
+    APP_NAME,
     APP_TITLE,
     THEME_DEFAULT,
     WINDOW_MIN_HEIGHT,
@@ -40,6 +41,7 @@ from services.restore_service import (
     format_restore_status,
 )
 from services.startup_check import StartupCheckQueue
+from services.tray_manager import TrayManager
 from ui.components.context_menu import ContextMenu
 from ui.components.status_bar import StatusBar
 from ui.dialogs import ask_yes_no, show_error
@@ -108,6 +110,13 @@ class MainWindow(ctk.CTk):
         self.profile_actions = ProfileActionController(self)
         self._geometry_tracker = WindowGeometryTracker(self)
 
+        self._tray = TrayManager(
+            icon_path=get_asset_path("icon.ico"),
+            title=APP_NAME,
+            on_show=self._on_tray_show,
+            on_quit=self._on_tray_quit,
+        )
+
         self._apply_window_icon()
         self._restore_or_default_geometry()
 
@@ -142,7 +151,42 @@ class MainWindow(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self._geometry_tracker.start()
+
+        if self.settings.start_minimized:
+            self._hide_to_tray()
+
         self.after(_STARTUP_CHECK_DELAY_MS, self._run_startup_check)
+
+    # --- Системный трей ---
+
+    def _on_tray_show(self) -> None:
+        """Восстановление окна из трея (вызывается из pystray)."""
+        self.after(0, self._show_window)
+
+    def _show_window(self) -> None:
+        """Показать окно. Трей продолжает работать."""
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except Exception as exc:
+            logger.error("Ошибка восстановления окна: %r", exc)
+
+    def _on_tray_quit(self) -> None:
+        """Принудительный выход (вызывается из pystray)."""
+        self.after(0, lambda: self._on_close_request(force=True))
+
+    def _hide_to_tray(self) -> None:
+        if not self._tray.start():
+            logger.warning("Не удалось запустить трей — закрываю окно")
+            self._on_close_request(force=True)
+            return
+
+        try:
+            self.withdraw()
+            logger.info("Окно свёрнуто в трей")
+        except Exception as exc:
+            logger.error("Ошибка withdraw: %r", exc)
 
     # --- Публичный API: копирование с UI-обвязкой ---
 
@@ -794,11 +838,18 @@ class MainWindow(ctk.CTk):
 
     # --- Закрытие ---
 
-    def _on_close_request(self) -> None:
+    def _on_close_request(self, force: bool = False) -> None:
         if self._closing:
             return
 
-        if self.settings.confirm_on_exit:
+        # Сворачивание в трей по X (если не принудительный выход).
+        if not force and self.settings.minimize_to_tray:
+            if self._closing:
+                return
+            self._hide_to_tray()
+            return
+
+        if self.settings.confirm_on_exit and not force:
             confirmed = ask_yes_no(
                 self,
                 "Закрытие приложения",
@@ -811,6 +862,7 @@ class MainWindow(ctk.CTk):
                 return
 
         self._closing = True
+        self._tray.stop()
         self.startup_checker.cancel()
         try:
             if self.copy_service.is_running:

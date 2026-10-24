@@ -126,6 +126,9 @@ def _to_dict(s: AppSettings) -> dict:
         "window_geometry": s.window_geometry,
         "hash_cache_enabled": s.hash_cache_enabled,
         "run_autocheck_on_restored": s.run_autocheck_on_restored,
+        "minimize_to_tray": s.minimize_to_tray,
+        "autostart": s.autostart,
+        "start_minimized": s.start_minimized,
         "backup_keep_last_enabled": s.backup_keep_last_enabled,
         "backup_keep_last_n": s.backup_keep_last_n,
         "backup_delete_older_enabled": (
@@ -166,6 +169,11 @@ def _from_dict(data: dict) -> AppSettings:
         run_autocheck_on_restored=bool(
             data.get("run_autocheck_on_restored", False)
         ),
+        minimize_to_tray=bool(
+            data.get("minimize_to_tray", False)
+        ),
+        autostart=bool(data.get("autostart", False)),
+        start_minimized=bool(data.get("start_minimized", False)),
         backup_keep_last_enabled=bool(
             data.get("backup_keep_last_enabled", False)
         ),
