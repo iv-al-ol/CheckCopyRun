@@ -1,12 +1,11 @@
 # Строка строго до 120 символов
 line-length = 120
-# Целевая версия Python для применения современных синтаксических правил
-target-version = "py314"
+# Целевая версия Python: совпадает с .python-version (3.12)
+target-version = "py312"
 # Исключаем стандартные папки сборки и кэша
 exclude = [
     ".venv",
     "venv",
-    ".flet",
     "build",
     "dist",
     ".git",

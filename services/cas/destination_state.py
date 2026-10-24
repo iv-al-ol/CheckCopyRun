@@ -12,18 +12,18 @@ from pathlib import Path
 
 from core import long_io
 from core.paths import to_long_path
-from services.blob_store import BlobStore
-from services.copy_constants import (
-    STATE_KIND_AUTO,
-    is_special_first_segment,
-)
-from services.current_pointer import CurrentData, CurrentPointer
-from services.state_scanner import scan_destination
-from services.state_store import (
+from services.cas.blob_store import BlobStore
+from services.cas.current_pointer import CurrentData, CurrentPointer
+from services.cas.state_scanner import scan_destination
+from services.cas.state_store import (
     StateData,
     StateFile,
     StateStore,
     StateStoreError,
+)
+from services.common.copy_constants import (
+    STATE_KIND_AUTO,
+    is_special_first_segment,
 )
 from utils.logger import get_logger
 
@@ -40,12 +40,55 @@ def now_iso() -> str:
     return datetime.now().isoformat(timespec="milliseconds")
 
 
+# --- Запись указателя current ---
+
+def commit_current(
+    destination: str,
+    state_name: str,
+    *,
+    last_action: str,
+    restored_from: str = "",
+) -> None:
+    """Записывает current.json на указанное состояние.
+
+    Единая точка обновления указателя для copy_service,
+    restore_service и save_after_*. Ошибки I/O не пробрасываются:
+    указатель — вспомогательные данные, сбой не должен ломать
+    основную операцию.
+    """
+    if not destination or not state_name:
+        return
+
+    try:
+        CurrentPointer(destination).save(CurrentData(
+            state=state_name,
+            last_action=last_action,
+            last_action_at="",
+            restored_from=restored_from,
+        ))
+    except Exception as exc:
+        logger.warning("commit_current: %r", exc)
+
+
 # --- Сохранение (совместимость и для тестов) ---
 
-def save_after_copy(destination: str) -> None:
+def save_after_copy(
+    destination: str, state_name: str = "",
+) -> None:
+    """Фиксирует состояние destination как текущее.
+
+    state_name пуст — состояние сканируется и создаётся заново
+    (сценарий внешнего вызова). state_name задан — указатель
+    переводится на уже существующее состояние без повторного
+    сканирования (сценарий copy_service).
+    """
     if not destination:
         return
     if not long_io.isdir(str(destination)):
+        return
+
+    if state_name:
+        commit_current(destination, state_name, last_action="copy")
         return
 
     try:
@@ -74,14 +117,24 @@ def save_after_copy(destination: str) -> None:
 
         store = StateStore(destination)
         path = store.create(data)
-        CurrentPointer(destination).save_copy(path.name)
+        commit_current(
+            destination, path.name, last_action="copy",
+        )
     except Exception as exc:
         logger.warning("save_after_copy: %r", exc)
 
 
 def save_after_restore(
-    destination: str, backup_dir: str,
+    destination: str,
+    backup_dir: str,
+    *,
+    last_action: str = "restore",
 ) -> None:
+    """Переводит current.json на восстановленное состояние.
+
+    backup_dir — путь к файлу состояния или его имя. Если
+    состояние не читается, указатель не меняется.
+    """
     if not destination:
         return
     if not long_io.isdir(str(destination)):
@@ -104,8 +157,11 @@ def save_after_restore(
         )
         return
 
-    CurrentPointer(destination).save_restore(
-        state_name, restored_from=state_name,
+    commit_current(
+        destination,
+        state_name,
+        last_action=last_action,
+        restored_from=state_name,
     )
 
 

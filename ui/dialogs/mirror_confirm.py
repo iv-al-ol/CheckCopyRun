@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
-from services.mirror_check import MirrorStats
+from services.copy.mirror_check import MirrorStats
 from ui.components.button import (
     VARIANT_DANGER,
     VARIANT_SECONDARY,

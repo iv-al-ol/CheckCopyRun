@@ -15,7 +15,7 @@ from pathlib import Path
 from config.constants import DEFAULT_PROFILE_NAME_PREFIX
 from core.models import Profile
 from core.settings_store import save_settings
-from services.icon_cleanup import cleanup_unused_icons
+from services.system.icon_cleanup import cleanup_unused_icons
 from ui.components.icon_picker import pick_icon
 from ui.dialogs.profile_dialogs import (
     ask_delete_profiles,

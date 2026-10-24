@@ -13,9 +13,9 @@ GUI-цикл, требует рабочего стола и уведомлени
 
 from __future__ import annotations
 
-from services import tray as tray_module
-from services.tray import TrayIcon
-from services.tray_manager import TrayManager
+from services.system import tray as tray_module
+from services.system.tray import TrayIcon
+from services.system.tray_manager import TrayManager
 
 # --- TrayIcon ---
 

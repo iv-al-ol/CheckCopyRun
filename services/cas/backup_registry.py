@@ -19,8 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from services.current_pointer import CurrentData, CurrentPointer
-from services.state_store import (
+from services.cas.current_pointer import CurrentData, CurrentPointer
+from services.cas.state_store import (
     StateInfo,
     StateStore,
     StateStoreError,

@@ -5,18 +5,18 @@ from __future__ import annotations
 import hashlib
 import time
 
-from services.backup_cleanup import (
+from services.cas.backup_cleanup import (
     CleanupPolicy,
     cleanup_states,
 )
-from services.blob_store import BlobStore
-from services.copy_constants import STATE_KIND_AUTO
-from services.current_pointer import CurrentPointer
-from services.state_store import (
+from services.cas.blob_store import BlobStore
+from services.cas.current_pointer import CurrentPointer
+from services.cas.state_store import (
     StateData,
     StateFile,
     StateStore,
 )
+from services.common.copy_constants import STATE_KIND_AUTO
 
 
 def _sha(data: bytes) -> str:

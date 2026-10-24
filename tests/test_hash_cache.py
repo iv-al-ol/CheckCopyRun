@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from services.hash_cache import CacheEntry, HashCache, hash_file
+from services.common.hash_cache import CacheEntry, HashCache, hash_file
 
 
 def _make_cache(tmp_path: Path, **kwargs) -> HashCache:

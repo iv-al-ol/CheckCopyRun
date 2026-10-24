@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from core import long_io
 from core.paths import to_long_path
-from services.copy_constants import is_special_first_segment
+from services.common.copy_constants import is_special_first_segment
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

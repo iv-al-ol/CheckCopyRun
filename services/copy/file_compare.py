@@ -12,7 +12,7 @@ from enum import Enum
 
 from core import long_io
 from core.paths import to_long_path
-from services.hash_cache import HashCache, hash_file
+from services.common.hash_cache import HashCache, hash_file
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

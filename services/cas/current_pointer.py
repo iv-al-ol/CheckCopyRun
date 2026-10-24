@@ -12,13 +12,13 @@ from pathlib import Path
 
 from core import long_io
 from core.paths import to_long_path
-from services.copy_constants import (
+from services.cas.state_store import now_iso
+from services.common.copy_constants import (
     CCRUN_DIR_NAME,
     CURRENT_FILENAME,
     CURRENT_VERSION,
     TMP_SUFFIX,
 )
-from services.state_store import now_iso
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

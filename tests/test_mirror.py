@@ -6,9 +6,9 @@ import hashlib
 import threading
 from pathlib import Path
 
-from services.blob_store import BlobStore
-from services.copy_service import CopyService
-from services.mirror_check import (
+from services.cas.blob_store import BlobStore
+from services.copy.copy_service import CopyService
+from services.copy.mirror_check import (
     MirrorStats,
     scan_mirror_diff,
 )

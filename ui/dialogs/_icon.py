@@ -1,9 +1,9 @@
-"""Иконка диалогового окна.
+"""Иконка окна приложения (главного окна и диалогов).
 
-Кэширует PhotoImage, чтобы не пересоздавать его для каждого
-диалога. Устанавливает иконку двумя способами: iconbitmap (для
-заголовка окна) и iconphoto через PIL (для панели задач и
-случаев, когда iconbitmap не сработал).
+Единая точка установки иконки: кэширует PhotoImage, чтобы не
+пересоздавать его для каждого окна. Иконка ставится двумя
+способами: iconbitmap (для заголовка окна) и iconphoto через PIL
+(для панели задач и случаев, когда iconbitmap не сработал).
 
 Предупреждение PIL "Image was not the expected size" для
 нестандартных .ico — игнорируется локально: это не ошибка,
@@ -30,13 +30,18 @@ def get_icon_path() -> Path | None:
     """Путь к assets/icon.ico или None."""
     icon = get_asset_path("icon.ico")
     if not icon.exists():
-        logger.debug("Иконка диалога не найдена: %s", icon)
+        logger.debug("Иконка окна не найдена: %s", icon)
         return None
     return icon
 
 
-def apply_dialog_icon(dialog: ctk.CTkToplevel) -> None:
-    """Устанавливает иконку приложения на диалог."""
+def apply_app_icon(window, *, taskbar: bool = False) -> None:
+    """Устанавливает иконку приложения на окно.
+
+    taskbar=True — иконка ставится как иконка приложения
+    (главное окно); taskbar=False — как иконка конкретного
+    окна (диалоги).
+    """
     global _icon_photo_cache, _icon_photo_loaded
 
     icon_path = get_icon_path()
@@ -44,16 +49,16 @@ def apply_dialog_icon(dialog: ctk.CTkToplevel) -> None:
         return
 
     try:
-        dialog.iconbitmap(str(icon_path))
+        window.iconbitmap(str(icon_path))
     except Exception as exc:
-        logger.debug("iconbitmap диалога: %r", exc)
+        logger.debug("iconbitmap окна: %r", exc)
 
     if _icon_photo_loaded:
         if _icon_photo_cache is not None:
             try:
-                dialog.iconphoto(False, _icon_photo_cache)
+                window.iconphoto(taskbar, _icon_photo_cache)
             except Exception as exc:
-                logger.debug("iconphoto диалога: %r", exc)
+                logger.debug("iconphoto окна: %r", exc)
         return
 
     _icon_photo_loaded = True
@@ -61,7 +66,7 @@ def apply_dialog_icon(dialog: ctk.CTkToplevel) -> None:
     try:
         from PIL import Image, ImageTk
     except ImportError as exc:
-        logger.debug("Pillow недоступен для иконки диалога: %r", exc)
+        logger.debug("Pillow недоступен для иконки окна: %r", exc)
         return
 
     try:
@@ -80,6 +85,11 @@ def apply_dialog_icon(dialog: ctk.CTkToplevel) -> None:
         return
 
     try:
-        dialog.iconphoto(False, _icon_photo_cache)
+        window.iconphoto(taskbar, _icon_photo_cache)
     except Exception as exc:
-        logger.debug("iconphoto диалога (первый раз): %r", exc)
+        logger.debug("iconphoto окна (первый раз): %r", exc)
+
+
+def apply_dialog_icon(dialog: ctk.CTkToplevel) -> None:
+    """Устанавливает иконку приложения на диалог."""
+    apply_app_icon(dialog)

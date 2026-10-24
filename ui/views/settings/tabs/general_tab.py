@@ -5,7 +5,7 @@ from __future__ import annotations
 import customtkinter as ctk
 
 from config.constants import THEME_DEFAULT
-from services import autostart
+from services.system import autostart
 from ui.components.option_menu import StyledOptionMenu
 from ui.components.wrapping_label import WrappingLabel
 from ui.fonts import get_font

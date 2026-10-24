@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 import os
 
-from services.hash_cache import HashCache
-from services.state_scanner import scan_destination
+from services.cas.state_scanner import scan_destination
+from services.common.hash_cache import HashCache
 
 
 def test_empty_destination(tmp_path):

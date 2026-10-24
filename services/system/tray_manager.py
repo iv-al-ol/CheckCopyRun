@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from pathlib import Path
 
-from services.tray import TrayIcon
+from services.system.tray import TrayIcon
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

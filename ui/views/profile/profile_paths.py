@@ -44,25 +44,6 @@ def is_dir_empty(path: str) -> bool:
         return False
 
 
-def ensure_directory(path: str) -> bool:
-    """Гарантирует, что директория существует.
-
-    Если её нет — создаёт (включая промежуточные). True при
-    успехе, False если путь пуст или создать не удалось.
-    """
-    if not path:
-        return False
-    if long_io.isdir(path):
-        return True
-    try:
-        long_io.makedirs(path, exist_ok=True)
-        logger.info("Пересоздана директория: %s", path)
-        return True
-    except OSError as exc:
-        logger.error("Не удалось создать %s: %r", path, exc)
-        return False
-
-
 def source_error(source: str) -> str | None:
     """Текст ошибки, если source не задан или не существует."""
     if not source:

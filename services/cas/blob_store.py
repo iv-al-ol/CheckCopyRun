@@ -22,7 +22,7 @@ from pathlib import Path
 
 from core import long_io
 from core.paths import to_long_path
-from services.copy_constants import (
+from services.common.copy_constants import (
     BLOB_CHUNK_SIZE,
     BLOB_HASH_ALGORITHM,
     BLOB_SUBDIR_LEN,

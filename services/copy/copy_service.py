@@ -23,40 +23,41 @@ from pathlib import Path
 
 from core import long_io
 from core.paths import path_conflict_error, to_long_path
-from services.blob_store import BlobStore
-from services.copy_constants import (
-    STATE_KIND_AUTO,
-    STATE_KIND_RESTORE_POINT,
-    STATE_VERSION,
-    is_special_first_segment,
+from services.cas.blob_store import BlobStore
+from services.cas.current_pointer import CurrentPointer
+from services.cas.destination_state import (
+    save_after_copy,
+    save_after_restore,
 )
-from services.copy_errors import (
-    CopyError,
-    CopyValidationError,
-)
-from services.current_pointer import (
-    CurrentData,
-    CurrentPointer,
-)
-from services.file_compare import (
-    ComparisonResult,
-    files_identical,
-)
-from services.hash_cache import HashCache, hash_file
-from services.mirror_check import is_reparse_point
-from services.restore_apply import apply_plan
-from services.restore_planner import build_plan
-from services.state_scanner import (
+from services.cas.state_scanner import (
     list_user_files,
     scan_destination,
 )
-from services.state_store import (
+from services.cas.state_store import (
     StateData,
     StateFile,
     StateStore,
     StateStoreError,
     now_iso,
 )
+from services.common.copy_constants import (
+    STATE_KIND_AUTO,
+    STATE_KIND_RESTORE_POINT,
+    STATE_VERSION,
+    is_special_first_segment,
+)
+from services.common.copy_errors import (
+    CopyError,
+    CopyValidationError,
+)
+from services.common.hash_cache import HashCache, hash_file
+from services.copy.file_compare import (
+    ComparisonResult,
+    files_identical,
+)
+from services.copy.mirror_check import is_reparse_point
+from services.restore.restore_apply import apply_plan
+from services.restore.restore_planner import build_plan
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -483,7 +484,7 @@ class _CopyWorker(threading.Thread):
                 ).name
                 cur = self._current.load()
                 if cur is None or cur.state != name:
-                    self._current.save_copy(name)
+                    self._save_current(name, last_action="copy")
                     logger.info(
                         "Изменений нет — current → %s",
                         name,
@@ -520,7 +521,23 @@ class _CopyWorker(threading.Thread):
                 "state_after переиспользует существующий: %s",
                 name,
             )
-        self._current.save_copy(name)
+        self._save_current(name, last_action="copy")
+
+    def _save_current(
+        self, state_name: str, *, last_action: str,
+        restored_from: str = "",
+    ) -> None:
+        """Обновляет current.json на существующее состояние."""
+        if not state_name:
+            return
+        if last_action == "copy":
+            save_after_copy(self._destination, state_name)
+            return
+        save_after_restore(
+            self._destination,
+            state_name,
+            last_action=last_action,
+        )
 
     def _scan_with_progress(
         self,
@@ -876,25 +893,17 @@ class _CopyWorker(threading.Thread):
         self._result.rolled_back = apply_result.errors == 0
 
         if apply_result.errors == 0:
-            try:
-                if self._result.state_before_path:
-                    name = Path(
-                        self._result.state_before_path,
-                    ).name
-                    self._current.save_restore(
-                        name, restored_from=name,
-                    )
-                else:
-                    self._current.save(CurrentData(
-                        state="",
-                        last_action="rollback",
-                        last_action_at="",
-                        restored_from="",
-                    ))
-            except Exception as exc:
-                logger.warning(
-                    "rollback: update current: %r", exc,
+            if self._result.state_before_path:
+                name = Path(
+                    self._result.state_before_path,
+                ).name
+                self._save_current(
+                    name,
+                    last_action="rollback",
+                    restored_from=name,
                 )
+            else:
+                self._save_current("", last_action="rollback")
             logger.info(
                 "Откат copy успешен (восстановлено %d, "
                 "удалено %d)",
@@ -1066,8 +1075,11 @@ class CopyService:
                 logger.warning(
                     "Копирование не запущено: %s", exc,
                 )
+                # Значение фиксируем: имя exc удаляется при выходе
+                # из блока except, а лямбда вызывается отложенно.
+                error_message = str(exc)
                 try:
-                    self._scheduler(lambda: on_error(str(exc)))
+                    self._scheduler(lambda: on_error(error_message))
                 except Exception as sched_exc:
                     logger.error(
                         "scheduler упал на on_error: %r",

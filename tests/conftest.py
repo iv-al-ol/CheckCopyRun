@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from services.copy_service import PHASE_COPY, CopyService
-from services.restore_service import RestoreService
+from services.copy.copy_service import PHASE_COPY, CopyService
+from services.restore.restore_service import RestoreService
 
 
 @pytest.fixture

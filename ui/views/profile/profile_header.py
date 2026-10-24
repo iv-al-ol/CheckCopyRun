@@ -6,10 +6,8 @@ import customtkinter as ctk
 
 from config.constants import DEFAULT_PROFILE_ICON
 from core.models import Profile
-from ui.components.image_utils import (
-    load_ctk_image,
-    looks_like_image_path,
-)
+from core.paths import looks_like_image_path
+from ui.components.image_utils import load_ctk_image
 from ui.fonts import get_emoji_font, get_font
 from utils.logger import get_logger
 

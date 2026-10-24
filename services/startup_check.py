@@ -27,15 +27,15 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from core.models import Profile
+from core.paths import ensure_directory
 from core.settings_store import save_settings
-from services.copy_service import (
+from services.cas.current_pointer import CurrentPointer
+from services.copy.copy_service import (
     CopyResult,
     CopyService,
     format_cancel_status,
 )
-from services.current_pointer import CurrentPointer
-from services.disk_space import check_disk_space, format_bytes
-from ui.views.profile.profile_paths import ensure_directory
+from services.restore.disk_space import check_disk_space, format_bytes
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

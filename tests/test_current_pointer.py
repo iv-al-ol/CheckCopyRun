@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from services.copy_constants import CURRENT_FILENAME
-from services.current_pointer import (
+from services.cas.current_pointer import (
     CurrentData,
     CurrentPointer,
 )
+from services.common.copy_constants import CURRENT_FILENAME
 
 
 def test_missing(tmp_path):

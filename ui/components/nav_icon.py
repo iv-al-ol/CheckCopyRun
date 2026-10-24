@@ -25,10 +25,8 @@ from __future__ import annotations
 import customtkinter as ctk
 
 from config.constants import DEFAULT_PROFILE_ICON
-from ui.components.image_utils import (
-    load_ctk_image,
-    looks_like_image_path,
-)
+from core.paths import looks_like_image_path
+from ui.components.image_utils import load_ctk_image
 from ui.fonts import get_emoji_font
 from utils.logger import get_logger
 

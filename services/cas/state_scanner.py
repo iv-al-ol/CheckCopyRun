@@ -12,17 +12,17 @@ from datetime import datetime
 
 from core import long_io
 from core.paths import to_long_path
-from services.copy_constants import (
-    STATE_VERSION,
-    is_special_first_segment,
-)
-from services.hash_cache import HashCache, hash_file
-from services.mirror_check import is_reparse_point
-from services.state_store import (
+from services.cas.state_store import (
     StateData,
     StateFile,
     now_iso,
 )
+from services.common.copy_constants import (
+    STATE_VERSION,
+    is_special_first_segment,
+)
+from services.common.hash_cache import HashCache, hash_file
+from services.copy.mirror_check import is_reparse_point
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import time
 
-from services.current_pointer import CurrentData, CurrentPointer
-from services.destination_state import (
+from services.cas.current_pointer import CurrentData, CurrentPointer
+from services.cas.destination_state import (
     build_label,
     save_after_copy,
     save_after_restore,
@@ -14,9 +14,9 @@ from services.destination_state import (
 
 def _patch_time(monkeypatch, iso: str) -> None:
     """Мокает now_iso во всех модулях, где он используется."""
-    import services.current_pointer as cp_mod
-    import services.state_scanner as sc_mod
-    import services.state_store as ss_mod
+    import services.cas.current_pointer as cp_mod
+    import services.cas.state_scanner as sc_mod
+    import services.cas.state_store as ss_mod
 
     monkeypatch.setattr(cp_mod, "now_iso", lambda: iso)
     monkeypatch.setattr(ss_mod, "now_iso", lambda: iso)

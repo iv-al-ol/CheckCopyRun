@@ -40,7 +40,6 @@ STATES_DIR_NAME = "states"
 STATE_VERSION = 1
 STATE_FILE_PREFIX = "state_"
 
-STATE_KIND_INITIAL = "initial"
 STATE_KIND_AUTO = "auto"
 STATE_KIND_RESTORE_POINT = "restore_point"
 

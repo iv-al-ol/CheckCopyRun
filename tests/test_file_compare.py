@@ -5,11 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from services.file_compare import (
+from services.common.hash_cache import HashCache
+from services.copy.file_compare import (
     ComparisonResult,
     files_identical,
 )
-from services.hash_cache import HashCache
 
 
 def _prepare(

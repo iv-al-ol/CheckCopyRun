@@ -37,8 +37,8 @@ from config.constants import (
 )
 from core.models import Profile
 from core.settings_store import save_settings
-from services import destination_state
-from services.restore_service import RestoreResult
+from services.cas import destination_state
+from services.restore.restore_service import RestoreResult
 from ui.components.button import (
     VARIANT_PRIMARY,
     VARIANT_SECONDARY,

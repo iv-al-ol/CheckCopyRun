@@ -4,22 +4,22 @@ from __future__ import annotations
 
 import hashlib
 
-from services.backup_registry import (
+from services.cas.backup_registry import (
     compute_ui_info,
     delete_state,
     get_current,
     list_states,
 )
-from services.blob_store import BlobStore
-from services.copy_constants import (
-    STATE_KIND_AUTO,
-    STATE_KIND_RESTORE_POINT,
-)
-from services.current_pointer import CurrentPointer
-from services.state_store import (
+from services.cas.blob_store import BlobStore
+from services.cas.current_pointer import CurrentPointer
+from services.cas.state_store import (
     StateData,
     StateFile,
     StateStore,
+)
+from services.common.copy_constants import (
+    STATE_KIND_AUTO,
+    STATE_KIND_RESTORE_POINT,
 )
 
 

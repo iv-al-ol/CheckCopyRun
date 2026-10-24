@@ -18,11 +18,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 from core.models import Profile
+from core.paths import ensure_directory
 from core.settings_store import get_icons_dir
-from services.icon_extractor import save_exe_icon
+from services.system.icon_extractor import save_exe_icon
 from ui.dialogs import show_error
 from ui.views.profile.profile_paths import (
-    ensure_directory,
     open_folder_in_explorer,
     path_conflict_error,
     pick_destination_directory,

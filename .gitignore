@@ -30,15 +30,12 @@ ENV/
 env.bak/
 venv.bak/
 
-# --- Flet & Сборка (flet build) ---
-# Временные файлы сборщика Flet под мобильные и десктопные платформы
-.flet/
+# --- Сборка (Nuitka, см. build.py) ---
 build/
 dist/
-flet_bundle/
-*.apk
-*.aab
-*.ipa
+*.build/
+*.dist/
+*.onefile-build/
 *.exe
 *.dmg
 
@@ -65,6 +62,13 @@ flet_bundle/
 
 # --- AI Ассистенты (Cline / Roo Code) ---
 .cline/
+
+# --- Тесты и кэши ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # --- Особенности проекта ---
 reports/

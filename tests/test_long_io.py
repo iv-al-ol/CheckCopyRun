@@ -93,7 +93,7 @@ def test_stat_long(tmp_path):
 
 
 def test_hash_file_long(tmp_path):
-    from services.hash_cache import hash_file
+    from services.common.hash_cache import hash_file
 
     deep = _make_deep_path(tmp_path)
     f = deep / "file.txt"

@@ -18,17 +18,6 @@ logger = get_logger(__name__)
 
 _DEFAULT_SCALING_HINT = 4
 
-_IMAGE_EXTS = (".png", ".ico", ".jpg", ".jpeg", ".gif", ".bmp")
-
-
-def looks_like_image_path(value: str) -> bool:
-    """Похоже ли значение на путь к файлу-картинке."""
-    if not value:
-        return False
-    if "/" in value or "\\" in value:
-        return True
-    return value.lower().endswith(_IMAGE_EXTS)
-
 
 def load_ctk_image(
     path: str,

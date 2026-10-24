@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
-from services.disk_space import DiskSpaceCheck, format_bytes
+from services.restore.disk_space import DiskSpaceCheck, format_bytes
 from ui.components.button import (
     VARIANT_DANGER,
     VARIANT_SECONDARY,

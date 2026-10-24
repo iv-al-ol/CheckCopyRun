@@ -55,7 +55,7 @@
 - **Deleting blobs** — only via `BlobStore.gc(keep)` after diffing against the set of used hashes. Direct `unlink` of a blob is forbidden.
 
 ## 6. Settings, Secrets & Persistence
-- **Settings**: `%USERPROFILE%/Documents/CheckCopyRun/settings.dat`, DPAPI encryption (`services/dpapi.py`). Bound to the current Windows user.
+- **Settings**: `%USERPROFILE%/Documents/CheckCopyRun/settings.dat`, DPAPI encryption (`services/system/dpapi.py`). Bound to the current Windows user.
 - **Secrets**: only via `os.getenv()`. No secrets in code or logs.
 - **Migrations**: old fields must not crash — `_from_dict` reads with defaults, unknown keys ignored.
 - **Constants**: all "magic" numbers and strings — `UPPER_SNAKE_CASE` in `config/constants.py` or in the owning module.
@@ -76,7 +76,7 @@
 
 ## 9. Testing
 - **Framework**: `pytest`. Config — `[tool.pytest.ini_options]` in `pyproject.toml` (`testpaths = ["tests"]`, `pythonpath = ["."]`).
-- **What we test**: `services/*` and pure functions (`core/paths.py`, `core/long_io.py`, `services/selection_model.py`, `services/destination_state.py`, `services/startup_check.py`, etc.).
+- **What we test**: `services/**` and pure functions (`core/paths.py`, `core/long_io.py`, `services/selection_model.py`, `services/cas/destination_state.py`, `services/startup_check.py`, etc.).
 - **What we do not test**: CustomTkinter rendering, Tk widgets, real `filedialog`, real `explorer`. The UI layer is tested manually.
 - **Isolation from Tk**: tests MUST NOT import `customtkinter`. If a `scheduler` is needed — `lambda fn: fn()`.
 - **Fixtures**: `tests/conftest.py` — `src`, `dst`, `run_copy`, `run_restore`. For new scenarios add fixtures there as well.

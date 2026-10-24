@@ -17,8 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.models import AppSettings
+from core.paths import looks_like_image_path
 from core.settings_store import get_icons_dir
-from ui.components.image_utils import looks_like_image_path
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

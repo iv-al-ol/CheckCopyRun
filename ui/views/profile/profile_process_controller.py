@@ -6,17 +6,17 @@ from collections.abc import Callable
 from pathlib import Path
 
 from core.models import Profile
+from core.paths import ensure_directory
 from core.settings_store import save_settings
-from services.copy_service import (
+from services.copy.copy_service import (
     PHASE_SAVE_SCAN,
     PHASE_SAVE_STORE,
     CopyResult,
     format_copy_status,
 )
-from services.launcher import LaunchError, launch_exe
+from services.system.launcher import LaunchError, launch_exe
 from ui.dialogs import show_error
 from ui.views.profile.profile_paths import (
-    ensure_directory,
     path_conflict_error,
     source_error,
 )

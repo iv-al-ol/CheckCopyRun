@@ -6,7 +6,7 @@ import hashlib
 
 import pytest
 
-from services.blob_store import (
+from services.cas.blob_store import (
     BlobHashMismatch,
     BlobStore,
 )

@@ -93,9 +93,6 @@ class Profile:
         path = self.exe_full_path()
         return bool(path) and os.path.isfile(path)
 
-    def has_exe(self) -> bool:
-        return self.has_exe_in_source()
-
     def can_run(self) -> bool:
         return (
             self.has_source_and_dest()

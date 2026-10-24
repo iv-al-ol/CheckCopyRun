@@ -6,13 +6,13 @@ import json
 import threading
 from pathlib import Path
 
-from services.blob_store import BlobStore
-from services.copy_constants import (
+from services.cas.blob_store import BlobStore
+from services.cas.current_pointer import CurrentPointer
+from services.common.copy_constants import (
     CCRUN_DIR_NAME,
     STATES_DIR_NAME,
 )
-from services.copy_service import CopyService
-from services.current_pointer import CurrentPointer
+from services.copy.copy_service import CopyService
 
 
 def _run_copy(

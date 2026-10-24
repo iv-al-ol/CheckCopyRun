@@ -22,9 +22,9 @@ from pathlib import Path
 from typing import Literal
 
 from config.constants import DEFAULT_PROFILE_ICON
+from core.paths import looks_like_image_path
 from core.settings_store import get_icons_dir
-from services.icon_extractor import save_exe_icon
-from ui.components.image_utils import looks_like_image_path
+from services.system.icon_extractor import save_exe_icon
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

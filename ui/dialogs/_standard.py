@@ -60,22 +60,6 @@ def _simple(
     parent.wait_window(dialog)
 
 
-def show_info(
-    parent, title: str, text: str, parent_visible: bool | None = None,
-) -> None:
-    if parent_visible is None:
-        parent_visible = is_window_visible(parent)
-    _simple(parent, title, text, parent_visible)
-
-
-def show_warning(
-    parent, title: str, text: str, parent_visible: bool | None = None,
-) -> None:
-    if parent_visible is None:
-        parent_visible = is_window_visible(parent)
-    _simple(parent, title, text, parent_visible)
-
-
 def show_error(
     parent, title: str, text: str, parent_visible: bool | None = None,
 ) -> None:

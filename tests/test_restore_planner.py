@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 
-from services.blob_store import BlobStore
-from services.restore_planner import build_plan
-from services.state_store import StateData, StateFile
+from services.cas.blob_store import BlobStore
+from services.cas.state_store import StateData, StateFile
+from services.restore.restore_planner import build_plan
 
 
 def _sha(data: bytes) -> str:

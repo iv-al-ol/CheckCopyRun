@@ -10,10 +10,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from core import long_io
-from services.backup_registry import collect_keep_hashes
-from services.blob_store import BlobStore
-from services.current_pointer import CurrentPointer
-from services.state_store import (
+from services.cas.backup_registry import collect_keep_hashes
+from services.cas.blob_store import BlobStore
+from services.cas.current_pointer import CurrentPointer
+from services.cas.state_store import (
     StateStore,
     StateStoreError,
 )

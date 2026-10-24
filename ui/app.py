@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Callable
 from pathlib import Path
 
@@ -16,13 +15,13 @@ from config.constants import (
     WINDOW_MIN_WIDTH,
 )
 from core.models import AppSettings, Profile
-from core.paths import get_asset_path
+from core.paths import ensure_directory, get_asset_path
 from core.settings_store import load_settings, save_settings
-from services.backup_cleanup import (
+from services.cas.backup_cleanup import (
     CleanupPolicy,
     cleanup_states,
 )
-from services.copy_service import (
+from services.copy.copy_service import (
     PHASE_SAVE_SCAN,
     PHASE_SAVE_STORE,
     CopyProgress,
@@ -31,20 +30,21 @@ from services.copy_service import (
     format_cancel_status,
     format_copy_status,
 )
-from services.disk_space import check_disk_space
-from services.icon_cleanup import cleanup_unused_icons
-from services.mirror_check import scan_mirror_diff
-from services.restore_service import (
+from services.copy.mirror_check import scan_mirror_diff
+from services.restore.disk_space import check_disk_space
+from services.restore.restore_service import (
     RestoreProgress,
     RestoreResult,
     RestoreService,
     format_restore_status,
 )
 from services.startup_check import StartupCheckQueue
-from services.tray_manager import TrayManager
+from services.system.icon_cleanup import cleanup_unused_icons
+from services.system.tray_manager import TrayManager
 from ui.components.context_menu import ContextMenu
 from ui.components.status_bar import StatusBar
 from ui.dialogs import ask_yes_no, show_error
+from ui.dialogs._icon import apply_app_icon
 from ui.dialogs.disk_space import confirm_insufficient_space
 from ui.dialogs.mirror_confirm import confirm_mirror
 from ui.layouts.main_layout import MainLayout
@@ -59,10 +59,7 @@ from ui.profile_actions import ProfileActionController
 from ui.themes import apply_theme
 from ui.views.main_view import MainView
 from ui.views.profile import ProfileView
-from ui.views.profile.profile_paths import (
-    ensure_directory,
-    source_error,
-)
+from ui.views.profile.profile_paths import source_error
 from ui.views.settings import SettingsView
 from ui.window_geometry import (
     WindowGeometryTracker,
@@ -402,37 +399,10 @@ class MainWindow(ctk.CTk):
     # --- Иконка окна ---
 
     def _apply_window_icon(self) -> None:
-        icon_path = get_asset_path("icon.ico")
-        if not icon_path.exists():
-            logger.warning("Иконка не найдена: %s", icon_path)
-            return
-
         try:
-            self.iconbitmap(str(icon_path))
+            apply_app_icon(self, taskbar=True)
         except Exception as exc:
-            logger.warning("iconbitmap не удался: %r", exc)
-
-        try:
-            from PIL import Image, ImageTk
-        except ImportError as exc:
-            logger.debug("Pillow недоступен: %r", exc)
-            return
-
-        try:
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore",
-                    message="Image was not the expected size",
-                    category=UserWarning,
-                )
-                img = Image.open(icon_path)
-                if img.mode != "RGBA":
-                    img = img.convert("RGBA")
-                photo = ImageTk.PhotoImage(img)
-            self.iconphoto(True, photo)
-            self._icon_photo = photo
-        except Exception as exc:
-            logger.warning("iconphoto не удался: %r", exc)
+            logger.warning("Иконка окна не установлена: %r", exc)
 
     # --- Геометрия ---
 
@@ -713,7 +683,7 @@ class MainWindow(ctk.CTk):
             )
             return
 
-        from services.launcher import LaunchError, launch_exe
+        from services.system.launcher import LaunchError, launch_exe
         try:
             launch_exe(full)
         except LaunchError as exc:

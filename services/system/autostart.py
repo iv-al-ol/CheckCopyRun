@@ -10,6 +10,7 @@ except ImportError:
     winreg = None
 
 from config.constants import APP_NAME
+from core.paths import get_resource_root
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -101,7 +102,7 @@ def _pythonw_from_venv() -> Path | None:
 
     candidates = [python_exe.with_name("pythonw.exe")]
 
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = get_resource_root()
     candidates.append(project_root / ".venv" / "Scripts" / "pythonw.exe")
 
     for candidate in candidates:
@@ -130,7 +131,7 @@ def build_command() -> str | None:
         logger.debug(f"команда для .exe: {target!r}")
         return f'"{target}"'
 
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = get_resource_root()
     main_py = project_root / "main.py"
 
     if not main_py.exists():
@@ -211,19 +212,3 @@ def set_enabled(enabled: bool) -> bool:
     return enable() if enabled else disable()
 
 
-def get_current_command() -> str | None:
-    """Возвращает текущее значение из реестра или None."""
-    if not is_supported():
-        return None
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_READ
-        ) as key:
-            try:
-                value, _ = winreg.QueryValueEx(key, APP_NAME)
-                return str(value)
-            except FileNotFoundError:
-                return None
-    except OSError as exc:
-        logger.error(f"чтение текущей команды из реестра: {exc!r}")
-        return None

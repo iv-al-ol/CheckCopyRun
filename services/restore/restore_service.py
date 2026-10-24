@@ -30,21 +30,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from services.blob_store import BlobStore
-from services.copy_constants import STATE_KIND_RESTORE_POINT
-from services.current_pointer import (
-    CurrentData,
-    CurrentPointer,
-)
-from services.hash_cache import HashCache
-from services.restore_apply import apply_plan
-from services.restore_planner import build_plan
-from services.state_scanner import scan_destination
-from services.state_store import (
+from services.cas.blob_store import BlobStore
+from services.cas.current_pointer import CurrentPointer
+from services.cas.destination_state import commit_current
+from services.cas.state_scanner import scan_destination
+from services.cas.state_store import (
     StateData,
     StateStore,
     StateStoreError,
 )
+from services.common.copy_constants import STATE_KIND_RESTORE_POINT
+from services.common.hash_cache import HashCache
+from services.restore.restore_apply import apply_plan
+from services.restore.restore_planner import build_plan
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -469,17 +467,12 @@ class _RestoreWorker(threading.Thread):
         self, state_name: str, *, last_action: str,
         restored_from: str,
     ) -> None:
-        if self._current is None:
-            return
-        try:
-            self._current.save(CurrentData(
-                state=state_name,
-                last_action=last_action,
-                last_action_at="",
-                restored_from=restored_from,
-            ))
-        except Exception as exc:
-            logger.warning("save current: %r", exc)
+        commit_current(
+            self._destination,
+            state_name,
+            last_action=last_action,
+            restored_from=restored_from,
+        )
 
     # --- События ---
 

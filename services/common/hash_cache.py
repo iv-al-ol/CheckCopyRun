@@ -26,7 +26,7 @@ from pathlib import Path
 
 from config.constants import HASH_CACHE_ALGORITHM
 from core import long_io
-from services.copy_constants import (
+from services.common.copy_constants import (
     CCRUN_DIR_NAME,
     HASH_CACHE_FILENAME,
     HASH_CACHE_VERSION,

@@ -186,24 +186,43 @@ def display_path(path: str | os.PathLike) -> str:
     return from_long_path(str(path))
 
 
-# --- Проверки ---
+# --- Проверки и подготовка директорий ---
 
-def is_valid_directory(path: str) -> bool:
+def ensure_directory(path: str) -> bool:
+    """Гарантирует, что директория существует.
+
+    Если её нет — создаёт (включая промежуточные). True при
+    успехе, False если путь пуст или создать не удалось.
+    """
     if not path:
         return False
     try:
-        return os.path.isdir(to_long_path(path))
-    except OSError:
+        target = to_long_path(path)
+    except OSError as exc:
+        logger.debug("ensure_directory: %r", exc)
         return False
-
-
-def is_valid_file(path: str) -> bool:
-    if not path:
-        return False
+    if os.path.isdir(target):
+        return True
     try:
-        return os.path.isfile(to_long_path(path))
-    except OSError:
+        os.makedirs(target, exist_ok=True)
+    except OSError as exc:
+        logger.debug("ensure_directory: makedirs %s: %r", path, exc)
         return False
+    logger.info("Пересоздана директория: %s", path)
+    return True
+
+
+# Расширения, которые считаются файлами-картинками в UI.
+IMAGE_EXTENSIONS = (".png", ".ico", ".jpg", ".jpeg", ".gif", ".bmp")
+
+
+def looks_like_image_path(value: str) -> bool:
+    """Похоже ли значение на путь к файлу-картинке."""
+    if not value:
+        return False
+    if "/" in value or "\\" in value:
+        return True
+    return value.lower().endswith(IMAGE_EXTENSIONS)
 
 
 def _compare_key(path: str) -> str:

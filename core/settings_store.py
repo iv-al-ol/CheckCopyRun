@@ -18,7 +18,7 @@ from config.constants import (
 )
 from core.models import AppSettings, Profile
 from core.paths import get_documents_dir
-from services.dpapi import DpapiError, protect, unprotect
+from services.system.dpapi import DpapiError, protect, unprotect
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

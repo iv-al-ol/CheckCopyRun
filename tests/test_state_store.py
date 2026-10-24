@@ -6,17 +6,17 @@ import time
 
 import pytest
 
-from services.copy_constants import (
-    STATE_KIND_AUTO,
-    STATE_KIND_RESTORE_POINT,
-    STATE_VERSION,
-)
-from services.state_store import (
+from services.cas.state_store import (
     StateData,
     StateFile,
     StateStore,
     StateStoreError,
     now_iso,
+)
+from services.common.copy_constants import (
+    STATE_KIND_AUTO,
+    STATE_KIND_RESTORE_POINT,
+    STATE_VERSION,
 )
 
 

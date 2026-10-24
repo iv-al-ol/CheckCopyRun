@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 from core.models import Profile
-from services.current_pointer import CurrentPointer
+from services.cas.current_pointer import CurrentPointer
 from services.startup_check import (
     _is_restored,
     select_startup_candidates,

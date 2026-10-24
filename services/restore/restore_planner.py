@@ -14,8 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from services.blob_store import BlobStore
-from services.state_store import StateData, StateFile
+from services.cas.blob_store import BlobStore
+from services.cas.state_store import StateData, StateFile
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

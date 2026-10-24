@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from services import autostart
+from services.system import autostart
 
 # --- is_supported ---
 

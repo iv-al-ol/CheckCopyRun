@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from services.copy_constants import CCRUN_DIR_NAME
-from services.copy_service import (
+from services.common.copy_constants import CCRUN_DIR_NAME
+from services.copy.copy_service import (
     PHASE_COPY,
     PHASE_SAVE_SCAN,
     PHASE_SAVE_STORE,
@@ -729,11 +729,11 @@ def test_state_before_reuses_existing(src, dst, run_copy):
     уже есть в резервах, но current потерян/указывает на
     несуществующий state. Раньше создавался бы дубликат.
     """
-    from services.current_pointer import (
+    from services.cas.current_pointer import (
         CurrentData,
         CurrentPointer,
     )
-    from services.state_store import StateStore
+    from services.cas.state_store import StateStore
 
     (src / "a.txt").write_text("v1")
     run_copy(src, dst)  # state A
@@ -763,7 +763,7 @@ def test_state_before_reuses_existing(src, dst, run_copy):
 def test_state_after_reuses_existing(src, dst, run_copy):
     """Если после copy состояние совпадает с существующим
     state — state_after переиспользует его."""
-    from services.state_store import StateStore
+    from services.cas.state_store import StateStore
 
     (src / "a.txt").write_text("v1")
     run_copy(src, dst)  # state A
@@ -799,7 +799,7 @@ def test_no_new_state_when_already_in_backups(
     copy без изменений не создаёт ни state_before,
     ни state_after.
     """
-    from services.state_store import StateStore
+    from services.cas.state_store import StateStore
 
     (src / "a.txt").write_text("v1")
     r1 = run_copy(src, dst)  # A

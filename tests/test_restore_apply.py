@@ -5,11 +5,11 @@ from __future__ import annotations
 import hashlib
 import threading
 
-from services.blob_store import BlobStore
-from services.copy_constants import TMP_SUFFIX
-from services.restore_apply import apply_plan
-from services.restore_planner import build_plan
-from services.state_store import StateData, StateFile
+from services.cas.blob_store import BlobStore
+from services.cas.state_store import StateData, StateFile
+from services.common.copy_constants import TMP_SUFFIX
+from services.restore.restore_apply import apply_plan
+from services.restore.restore_planner import build_plan
 
 
 def _sha(data: bytes) -> str:
@@ -198,7 +198,7 @@ def test_apply_tmp_removed_on_error(tmp_path, monkeypatch):
     current = _state({"a.txt": b"new"})
     plan = build_plan(target, current, store)
 
-    import services.restore_apply as ra
+    import services.restore.restore_apply as ra
 
     def boom(*args, **kwargs):
         raise OSError("simulated error")

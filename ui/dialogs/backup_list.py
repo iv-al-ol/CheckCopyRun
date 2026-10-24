@@ -21,15 +21,15 @@ from datetime import datetime
 
 import customtkinter as ctk
 
-from services.backup_registry import (
+from services.cas.backup_registry import (
     StateUiInfo,
     compute_ui_info,
     delete_state,
     get_current,
     list_states,
 )
-from services.disk_space import format_bytes
-from services.state_store import StateInfo
+from services.cas.state_store import StateInfo
+from services.restore.disk_space import format_bytes
 from ui.components.button import (
     VARIANT_DANGER,
     VARIANT_PRIMARY,

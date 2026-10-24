@@ -17,12 +17,12 @@ from pathlib import Path
 
 from core import long_io
 from core.paths import to_long_path
-from services.copy_constants import (
+from services.cas.state_store import StateData
+from services.common.copy_constants import (
     TMP_SUFFIX,
     is_special_first_segment,
 )
-from services.restore_planner import RestorePlan
-from services.state_store import StateData
+from services.restore.restore_planner import RestorePlan
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

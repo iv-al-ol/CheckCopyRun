@@ -7,14 +7,14 @@ import json
 import time
 from pathlib import Path
 
-from services.copy_constants import STATE_KIND_RESTORE_POINT
-from services.current_pointer import CurrentPointer
-from services.restore_service import (
+from services.cas.current_pointer import CurrentPointer
+from services.cas.state_store import StateStore
+from services.common.copy_constants import STATE_KIND_RESTORE_POINT
+from services.restore.restore_service import (
     RestoreProgress,
     RestoreResult,
     format_restore_status,
 )
-from services.state_store import StateStore
 
 
 def _sha(data: bytes) -> str:
@@ -119,7 +119,7 @@ def test_restore_already_there(
 
 
 def test_restore_missing_state(dst):
-    from services.restore_service import RestoreService
+    from services.restore.restore_service import RestoreService
     svc = RestoreService(scheduler=lambda fn: fn())
     errors = []
     started = svc.start(
@@ -351,7 +351,7 @@ def test_restore_point_reuses_current(
     (src / "a.txt").write_text("v2")
     run_copy(src, dst)
 
-    from services.state_store import StateStore
+    from services.cas.state_store import StateStore
     states_before = len(StateStore(str(dst)).list())
 
     r = run_restore(Path(r1.state_after_path).name, dst)
@@ -365,11 +365,11 @@ def test_restore_point_reuses_when_current_broken(
 ):
     """Если current указывает не туда, но среди states есть
     идентичный — переиспользуем его."""
-    from services.current_pointer import (
+    from services.cas.current_pointer import (
         CurrentData,
         CurrentPointer,
     )
-    from services.state_store import StateStore
+    from services.cas.state_store import StateStore
 
     (src / "a.txt").write_text("v1")
     r1 = run_copy(src, dst)  # A
@@ -399,7 +399,7 @@ def test_restore_point_creates_when_manual_edit(
 ):
     """Если destination был изменён вручную — создаётся
     новая точка возврата (нельзя переиспользовать)."""
-    from services.state_store import StateStore
+    from services.cas.state_store import StateStore
 
     (src / "a.txt").write_text("v1")
     r1 = run_copy(src, dst)  # A

@@ -80,7 +80,7 @@ main.py → ui.app.MainWindow
             ├── core/             модели, пути, settings_store, long_io
             ├── services/         вся бизнес-логика (не знает про Tk)
             ├── ui/               CTk-слой: layouts, components, views, dialogs
-            └── utils/            logger, app_icon
+            └── utils/            логирование
 ```
 
 **Инвариант**: `services/` не импортирует `tkinter` / `customtkinter`.
@@ -89,57 +89,82 @@ UI получает события через колбэки + `scheduler` (об
 
 ### Ключевые модули
 
-**CAS / состояния:**
-- `services/blob_store.py` — `BlobStore`. Хранение уникальных
+Пакет `services/` разбит на подпакеты: `cas`, `common`, `copy`,
+`restore`, `system`. Их `__init__.py` используют ленивые
+реэкспорты (PEP 562), поэтому импорт одного модуля не тянет
+весь подпакет и циклы `core ↔ services` невозможны.
+
+**CAS / состояния (`services/cas/`):**
+- `services/cas/blob_store.py` — `BlobStore`. Хранение уникальных
   контентов по sha256. `put`, `get`, `has`, `gc`.
-- `services/state_store.py` — `StateStore`. Создание/чтение/список
+- `services/cas/state_store.py` — `StateStore`. Создание/чтение/список
   `state_*.json`. `StateData` (полный список файлов + `empty_dirs` +
   summary), `StateInfo` (обёртка для UI).
-- `services/state_scanner.py` — `scan_destination(destination,
+- `services/cas/state_scanner.py` — `scan_destination(destination,
   hash_cache, file_list, on_progress) -> StateData`.
-- `services/current_pointer.py` — `CurrentPointer` → `current.json`
+- `services/cas/current_pointer.py` — `CurrentPointer` → `current.json`
   (`state`, `last_action`, `last_action_at`, `restored_from`).
   `last_action` ∈ `copy | restore | rollback | initial`.
+- `services/cas/backup_registry.py` — реестр состояний для UI.
+- `services/cas/backup_cleanup.py` — политика + GC blob-ов.
+- `services/cas/destination_state.py` — метка «Текущая версия от …»
+  (учитывает `last_action` и ручные правки через per-file mtime).
+  Здесь же единый примитив записи указателя: `commit_current`,
+  а также `save_after_copy` / `save_after_restore` — их используют
+  `copy_service` и `restore_service`, чтобы не дублировать запись
+  `current.json`. `last_action ∈ copy | restore | rollback`.
+
+**Общее (`services/common/`):**
+- `services/common/copy_constants.py` — имена служебных папок,
+  версии форматов, `is_special_first_segment`.
+- `services/common/copy_errors.py` — `CopyError`,
+  `CopyValidationError`.
+- `services/common/hash_cache.py` — `HashCache`, `hash_file`.
 
 **Копирование и восстановление:**
-- `services/copy_service.py` — `CopyService` / `_CopyWorker`. Фазы
+- `services/copy/copy_service.py` — `CopyService` / `_CopyWorker`. Фазы
   прогресса: `copy` (файлы), `save_scan` (сканирование destination),
   `save_store` (сохранение новых blob-ов). При отмене — автооткат
   через `apply_plan`.
-- `services/restore_service.py` — `RestoreService` / `_RestoreWorker`.
-  Перед restore создаёт `restore_point` **с дедупликацией**:
-  переиспользует `current.state` или любой существующий state с
-  идентичным содержимым; только если такого нет — создаёт новый.
-- `services/restore_planner.py` — `build_plan(target, current,
+- `services/copy/file_compare.py` — `files_identical` с эвристикой
+  «size + mtime_ns + кэш».
+- `services/copy/mirror_check.py` — `scan_mirror_diff` (pre-scan, диалог
+  «удаляется > 50%»), `is_reparse_point`.
+- `services/restore/restore_service.py` — `RestoreService` /
+  `_RestoreWorker`. Перед restore создаёт `restore_point`
+  **с дедупликацией**: переиспользует `current.state` или любой
+  существующий state с идентичным содержимым; только если такого
+  нет — создаёт новый.
+- `services/restore/restore_planner.py` — `build_plan(target, current,
   blobs) -> RestorePlan` (`to_restore`, `to_delete_files`,
   `create_dirs`, `needed_dirs`, `missing_blobs`, `skipped_files`).
-- `services/restore_apply.py` — `apply_plan(plan, target,
+- `services/restore/restore_apply.py` — `apply_plan(plan, target,
   destination, on_progress, cancel_event) -> ApplyResult`.
   Единый механизм для restore и rollback.
-- `services/file_compare.py` — `files_identical` с эвристикой
-  «size + mtime_ns + кэш».
-- `services/hash_cache.py` — `HashCache`, `hash_file`.
+- `services/restore/disk_space.py` — быстрая оценка по stat.
 
 **Вспомогательное:**
-- `services/mirror_check.py` — `scan_mirror_diff` (pre-scan, диалог
-  «удаляется > 50%»), `is_reparse_point`.
-- `services/disk_space.py` — быстрая оценка по stat.
-- `services/backup_registry.py` — реестр состояний для UI.
-- `services/backup_cleanup.py` — политика + GC blob-ов.
-- `services/destination_state.py` — метка «Текущая версия от …»
-  (учитывает `last_action` и ручные правки через per-file mtime).
 - `services/startup_check.py` — `StartupCheckQueue`,
   `select_startup_candidates(profiles, run_on_restored)`,
   `_is_restored(destination)`.
-- `services/long_io.py` — обёртки I/O с `\\?\` для длинных путей.
+- `services/selection_model.py` — выделение профилей в UI.
+- `core/long_io.py` — обёртки I/O с `\\?\` для длинных путей.
+- `core/paths.py` — помимо путей и валидации: `ensure_directory`
+  (создание директории, используется и сервисами, и UI) и
+  `looks_like_image_path` (проверка «похоже на картинку»).
+  Эти функции специально живут в `core`, чтобы `services/` не
+  импортировал `ui/`.
 
-**Системное:**
-- `services/dpapi.py` — обёртка `CryptProtectData/UnprotectData`.
-- `services/icon_extractor.py` — извлечение иконки из `.exe`
+**Системное (`services/system/`):**
+- `services/system/autostart.py` — автозапуск через реестр (HKCU).
+- `services/system/dpapi.py` — обёртка `CryptProtectData/UnprotectData`.
+- `services/system/icon_extractor.py` — извлечение иконки из `.exe`
   (PrivateExtractIconsW + ExtractIconExW).
-- `services/icon_cleanup.py` — очистка PNG, на которые не ссылается
+- `services/system/icon_cleanup.py` — очистка PNG, на которые не ссылается
   ни один профиль.
-- `services/launcher.py` — `launch_exe` через `subprocess.Popen`.
+- `services/system/launcher.py` — `launch_exe` через `subprocess.Popen`.
+- `services/system/tray.py`, `services/system/tray_manager.py` — иконка
+  в системном трее.
 
 **UI:**
 - `ui/app.py` — `MainWindow`. Оркестратор: роутер, статус-бар,
