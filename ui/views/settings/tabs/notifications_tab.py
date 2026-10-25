@@ -28,21 +28,30 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 _SECTION_FONT_SIZE = 14
-_HINT_FONT_SIZE = 11
 
 _ENTRY_WIDTH = 60
 _SECTION_PADY_TOP = 8
-_ROW_PADY = 6
-_HINT_HPADDING = 14
+
+# Горизонтальный отступ параметров внутри рамки. Совпадает с
+# отступом примечаний (`HintLabel`), чтобы текст начинался под
+# чекбоксом.
+_ITEM_PADX = 4
+
+# Подпись + поле + единица занимают три колонки, четвёртая —
+# пустая и растягиваемая. Примечание растягивается на все.
+_COLUMNS = 3
+_SPACER_COLUMN = 3
 
 _GROUP_BORDER_WIDTH = 1
 _GROUP_PADX = 14
-_GROUP_PADY_V = 12
+# Внутри рамки верхний зазор даёт сам первый параметр
+# (`HintLabel.item_pady()`), поэтому здесь только небольшой
+# отступ от границы.
+_GROUP_PADY_V = 4
 _GROUP_PADDING_BOTTOM = 16
 
 _ENABLED_TEXT_COLOR = ("gray10", "gray90")
 _DISABLED_TEXT_COLOR = ("gray55", "gray45")
-_HINT_TEXT_COLOR = ("gray40", "gray60")
 
 
 class NotificationsTab(SettingsTab):
@@ -53,6 +62,7 @@ class NotificationsTab(SettingsTab):
         self._group_widgets: list = []
         self._group_labels: list[ctk.CTkLabel] = []
         self._group_hints: list[HintLabel] = []
+        self._inner = None
         self._build()
         self._sync_from_settings()
 
@@ -79,7 +89,7 @@ class NotificationsTab(SettingsTab):
         )
         self._enabled_cb.grid(
             row=1, column=0, sticky="w",
-            padx=4, pady=(0, 10),
+            padx=_ITEM_PADX, pady=(0, _GROUP_PADDING_BOTTOM),
         )
 
         group = ctk.CTkFrame(
@@ -100,6 +110,15 @@ class NotificationsTab(SettingsTab):
             row=0, column=0, sticky="ew",
             padx=_GROUP_PADX, pady=_GROUP_PADY_V,
         )
+        # Растягивается пустая колонка справа, а не первая:
+        # иначе подпись и поле разъезжаются по краям строки.
+        inner.grid_columnconfigure(_SPACER_COLUMN, weight=1)
+        self._inner = inner
+
+        # Ритм отступов тот же, что в «Общих» и «Бэкапах»: зазор
+        # задаёт верхний отступ (`HintLabel.item_pady()`), а
+        # примечание прижимается к своему параметру сверху.
+        row = 0
 
         # --- Каналы ---
         self._changes_var = ctk.BooleanVar(value=True)
@@ -109,12 +128,17 @@ class NotificationsTab(SettingsTab):
             variable=self._changes_var,
             command=self._on_changes_toggle,
         ))
-        self._changes_cb.pack(anchor="w", pady=HintLabel.item_pady())
+        self._changes_cb.grid(
+            row=row, column=0, sticky="w",
+            padx=_ITEM_PADX, pady=HintLabel.item_pady(),
+        )
+        row += 1
         self._hint(
-            inner,
-            "При любом изменении в папке источника придет"
+            row,
+            "При любом изменении в папке источника придёт "
             "уведомление с количеством изменений.",
         )
+        row += 1
 
         self._message_var = ctk.BooleanVar(value=True)
         self._message_cb = self._track(ctk.CTkCheckBox(
@@ -123,13 +147,18 @@ class NotificationsTab(SettingsTab):
             variable=self._message_var,
             command=self._on_message_toggle,
         ))
-        self._message_cb.pack(anchor="w", pady=HintLabel.item_pady())
+        self._message_cb.grid(
+            row=row, column=0, sticky="w",
+            padx=_ITEM_PADX, pady=HintLabel.item_pady(),
+        )
+        row += 1
         self._hint(
-            inner,
+            row,
             "Автор папки источника может оставить текст в этом "
             "файле — он покажется в уведомлении. В целевую папку "
             "файл не копируется.",
         )
+        row += 1
 
         self._aggregate_var = ctk.BooleanVar(value=False)
         self._aggregate_cb = self._track(ctk.CTkCheckBox(
@@ -138,28 +167,34 @@ class NotificationsTab(SettingsTab):
             variable=self._aggregate_var,
             command=self._on_aggregate_toggle,
         ))
-        self._aggregate_cb.pack(anchor="w", pady=HintLabel.item_pady())
+        self._aggregate_cb.grid(
+            row=row, column=0, sticky="w",
+            padx=_ITEM_PADX, pady=HintLabel.item_pady(),
+        )
+        row += 1
         self._hint(
-            inner,
+            row,
             "По всем профилям будет приходить одно общее уведомление.",
         )
+        row += 1
 
         # --- Автозакрытие ---
-        self._auto_close_row = ctk.CTkFrame(
-            inner, fg_color="transparent",
-        )
-        self._auto_close_row.pack(
-            anchor="w", pady=HintLabel.item_pady(),
-        )
-
+        # Подпись, поле и единица размещаются прямо в сетке:
+        # промежуточный фрейм добавлял высоту, и зазор до
+        # примечания отличался от других вкладок.
         self._add_label(
-            self._auto_close_row, "Скрывать через",
-        ).pack(side="left", padx=(0, 8))
+            inner, "Скрывать через",
+        ).grid(
+            row=row, column=0, sticky="w",
+            padx=_ITEM_PADX, pady=HintLabel.item_pady(),
+        )
 
         self._auto_close_entry = ctk.CTkEntry(
-            self._auto_close_row, width=_ENTRY_WIDTH,
+            inner, width=_ENTRY_WIDTH,
         )
-        self._auto_close_entry.pack(side="left", padx=(0, 6))
+        self._auto_close_entry.grid(
+            row=row, column=1, sticky="w", padx=(8, 6),
+        )
         self._auto_close_entry.bind(
             "<Return>", self._on_auto_close_commit,
         )
@@ -168,27 +203,31 @@ class NotificationsTab(SettingsTab):
         )
 
         self._add_label(
-            self._auto_close_row, "сек.",
-        ).pack(side="left")
+            inner, "сек.",
+        ).grid(row=row, column=2, sticky="w")
+        row += 1
 
         self._hint(
-            inner,
+            row,
             f"0 — уведомление остаётся до клика по нему. "
-            f"Максимум — {NOTIFY_AUTO_CLOSE_MAX} секунд. ",
+            f"Максимум — {NOTIFY_AUTO_CLOSE_MAX} секунд.",
         )
+        row += 1
 
         # --- Частота опроса ---
-        interval_row = ctk.CTkFrame(inner, fg_color="transparent")
-        interval_row.pack(anchor="w", pady=HintLabel.item_pady())
-
         self._add_label(
-            interval_row, "Проверять каждые",
-        ).pack(side="left", padx=(0, 8))
+            inner, "Проверять каждые",
+        ).grid(
+            row=row, column=0, sticky="w",
+            padx=_ITEM_PADX, pady=HintLabel.item_pady(),
+        )
 
         self._interval_entry = ctk.CTkEntry(
-            interval_row, width=_ENTRY_WIDTH,
+            inner, width=_ENTRY_WIDTH,
         )
-        self._interval_entry.pack(side="left", padx=(0, 6))
+        self._interval_entry.grid(
+            row=row, column=1, sticky="w", padx=(8, 6),
+        )
         self._interval_entry.bind(
             "<Return>", self._on_interval_commit,
         )
@@ -197,23 +236,20 @@ class NotificationsTab(SettingsTab):
         )
 
         self._add_label(
-            interval_row, "мин.",
-        ).pack(side="left")
+            inner, "мин.",
+        ).grid(row=row, column=2, sticky="w")
+        row += 1
 
         self._hint(
-            inner,
-            f"От {MONITOR_INTERVAL_MIN} до {MONITOR_INTERVAL_MAX}. "
-            "Маленький интервал больше нагружает дисковое пространство.",
+            row,
+            f"От {MONITOR_INTERVAL_MIN} до {MONITOR_INTERVAL_MAX} мин. "
+            "Чем меньше интервал, тем чаще опрос источника.",
         )
 
-    def _hint(self, master, text: str) -> None:
-        """Короткое пояснение под параметром.
-
-        Горизонтальный отступ не задаётся: примечание должно
-        начинаться там же, где чекбокс, к которому относится.
-        """
-        hint = HintLabel(master, text=text)
-        hint.pack(fill="x", pady=HintLabel.pady())
+    def _hint(self, row: int, text: str) -> None:
+        """Примечание под параметром в предыдущей строке сетки."""
+        hint = HintLabel(self._inner, text=text)
+        hint.place_in_grid(row=row, columnspan=_SPACER_COLUMN + 1)
         self._group_hints.append(hint)
 
     def _add_label(

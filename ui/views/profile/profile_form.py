@@ -197,7 +197,7 @@ class ProfileForm(ctk.CTkFrame):
                 "Файлы и папки, которых нет в папке источника, "
                 "будут убраны из папки."
             ),
-        ).place_in_grid(row=7)
+        ).place_in_grid(row=7, padx=0)
 
         self._notify_changes_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
@@ -227,7 +227,7 @@ class ProfileForm(ctk.CTkFrame):
                 "Файл составляется автором папки источника. "
                 "Файл не копируется в целевую папку."
             ),
-        ).place_in_grid(row=10)
+        ).place_in_grid(row=10, padx=0)
 
     # --- Свойства чекбоксов ---
 

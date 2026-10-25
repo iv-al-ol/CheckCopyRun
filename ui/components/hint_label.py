@@ -3,18 +3,22 @@
 Единый компонент для всех окон: одинаковый цвет, шрифт и,
 главное, одинаковые отступы. Подсказка относится к параметру
 над ней, поэтому сверху зазор маленький (`HINT_PADY_TOP`), а
-снизу — больше (`HINT_PADY_BOTTOM`), чтобы отделить её от
-следующего параметра.
+снизу — нулевой: зазор до следующего параметра даёт его
+собственный верхний отступ (`ITEM_PADY_TOP`).
 
 Использование:
 
-    HintLabel(parent, text="…").grid(
-        row=row, column=0, sticky="ew",
-        padx=4, pady=HintLabel.pady(),
+    HintLabel(parent, text="…").place_in_grid(row=row)
+
+    HintLabel(parent, text="…").pack(
+        fill="x", pady=HintLabel.pady(),
     )
 
-`pady()` — единственный источник отступов примечаний: менять
-ритм нужно здесь, а не в каждом окне отдельно.
+`pady()` — единственный источник вертикальных отступов
+примечаний: менять ритм нужно здесь, а не в каждом окне
+отдельно. Горизонтальный отступ по умолчанию равен отступу
+параметров настроек (`HINT_PADX`); если в окне параметры стоят
+без отступа (форма профиля), передайте `padx=0`.
 """
 
 from __future__ import annotations
@@ -65,7 +69,42 @@ class HintLabel(WrappingLabel):
     def __init__(self, master, *, h_padding: int = _HPADDING, **kwargs):
         kwargs.setdefault("text_color", _TEXT_COLOR)
         kwargs.setdefault("font", get_font(_FONT_SIZE))
+        # Текст прижат к верхнему краю: иначе у одно-строчного
+        # примечания он «всплывает» к середине блока, и видимый
+        # зазор до параметра оказывается больше, чем у
+        # много-строчного. Отступы должны быть одинаковыми.
+        kwargs.setdefault("anchor", "nw")
         super().__init__(master, h_padding=h_padding, **kwargs)
+        self._applied_height = -1
+
+    def _apply_wraplength(self) -> None:
+        """Пересчитывает перенос и подгоняет высоту под текст."""
+        super()._apply_wraplength()
+        self._fit_height()
+
+    def _fit_height(self) -> None:
+        """Сжимает блок до высоты текста.
+
+        `CTkLabel` держит фиксированную высоту (28 px) и
+        центрирует текст в ней. У одно-строчного примечания это
+        даёт лишние 9 px сверху, у много-строчного — нет, из-за
+        чего визуальные зазоры расходятся. Высота блока должна
+        совпадать с высотой текста: тогда `pady` — это и есть
+        реальный зазор.
+        """
+        label = getattr(self, "_label", None)
+        if label is None:
+            return
+        try:
+            need = label.winfo_reqheight()
+            if need <= 1:
+                return
+            if self._applied_height == need:
+                return
+            self._applied_height = need
+            self.configure(height=need)
+        except Exception as exc:
+            logger.debug("HintLabel._fit_height: %r", exc)
 
     @staticmethod
     def pady() -> tuple[int, int]:
@@ -97,16 +136,24 @@ class HintLabel(WrappingLabel):
         *,
         row: int,
         column: int = 0,
+        columnspan: int = 1,
         sticky: str = "ew",
+        padx: int = HINT_PADX,
     ) -> None:
         """Размещает примечание в grid с едиными отступами.
 
-        Единственный правильный способ размещения: `padx` и
-        `pady` берутся из компонента, а не задаются на месте.
+        Вертикальные отступы всегда берутся из компонента.
+        `padx` по умолчанию совпадает с отступом параметров
+        настроек; в форме профиля параметры стоят без отступа,
+        поэтому там передаётся `padx=0`.
+
+        `columnspan` нужен там, где параметр занимает несколько
+        колонок (подпись + поле + единица): примечание должно
+        растягиваться на всю их ширину.
         """
         self.grid(
-            row=row, column=column, sticky=sticky,
-            padx=HINT_PADX, pady=self.pady(),
+            row=row, column=column, columnspan=columnspan,
+            sticky=sticky, padx=padx, pady=self.pady(),
         )
 
     def set_enabled(self, enabled: bool) -> None:
