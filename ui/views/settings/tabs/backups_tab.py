@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
-from ui.components.wrapping_label import WrappingLabel
+from ui.components.hint_label import HintLabel
 from ui.fonts import get_font
 from ui.views.settings.tabs.base_tab import SettingsTab
 from utils.logger import get_logger
@@ -21,18 +21,14 @@ logger = get_logger(__name__)
 
 _SECTION_FONT_SIZE = 14
 _BODY_FONT_SIZE = 13
-_HINT_FONT_SIZE = 11
 
 _ENTRY_WIDTH = 60
 _SECTION_PADY_TOP = 8
-_ROW_PADY = 6
 
 _KEEP_LAST_MIN = 1
 _KEEP_LAST_MAX = 1000
 _DELETE_OLDER_MIN = 1
 _DELETE_OLDER_MAX = 3650
-
-_HINT_HPADDING = 12
 
 
 class BackupsTab(SettingsTab):
@@ -65,7 +61,7 @@ class BackupsTab(SettingsTab):
         keep_row = ctk.CTkFrame(self, fg_color="transparent")
         keep_row.grid(
             row=row, column=0, sticky="w",
-            padx=4, pady=(0, _ROW_PADY),
+            padx=4, pady=HintLabel.item_pady_plain(),
         )
         row += 1
 
@@ -98,7 +94,7 @@ class BackupsTab(SettingsTab):
         delete_row = ctk.CTkFrame(self, fg_color="transparent")
         delete_row.grid(
             row=row, column=0, sticky="w",
-            padx=4, pady=(0, _ROW_PADY),
+            padx=4, pady=HintLabel.item_pady_plain(),
         )
         row += 1
 
@@ -127,7 +123,7 @@ class BackupsTab(SettingsTab):
         ).pack(side="left")
 
         # --- Справка (растягивается по ширине) ---
-        WrappingLabel(
+        HintLabel(
             self,
             text=(
                 "Если включены оба правила — удаление происходит, "
@@ -137,13 +133,7 @@ class BackupsTab(SettingsTab):
                 "Ошибки удаления (папка занята, нет прав) пишутся "
                 "в лог, копирование не блокируется."
             ),
-            text_color=("gray40", "gray60"),
-            font=get_font(_HINT_FONT_SIZE),
-            h_padding=_HINT_HPADDING,
-        ).grid(
-            row=row, column=0, sticky="ew",
-            padx=4, pady=(0, 0),
-        )
+        ).place_in_grid(row=row)
 
     # --- Синхронизация ---
 

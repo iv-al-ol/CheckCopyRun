@@ -6,8 +6,8 @@ import customtkinter as ctk
 
 from config.constants import THEME_DEFAULT
 from services.system import autostart
+from ui.components.hint_label import HintLabel
 from ui.components.option_menu import StyledOptionMenu
-from ui.components.wrapping_label import WrappingLabel
 from ui.fonts import get_font
 from ui.themes import THEME_LABELS, apply_theme
 from ui.views.settings.tabs.base_tab import SettingsTab
@@ -17,13 +17,10 @@ logger = get_logger(__name__)
 
 _SECTION_FONT_SIZE = 14
 _BODY_FONT_SIZE = 13
-_HINT_FONT_SIZE = 11
 
 _OPTION_MENU_WIDTH = 220
-_HINT_HPADDING = 12
 
 _SECTION_PADY_TOP = 8
-_SECTION_PADY_BOTTOM = 12
 
 
 class GeneralTab(SettingsTab):
@@ -45,7 +42,7 @@ class GeneralTab(SettingsTab):
         theme_row = ctk.CTkFrame(self, fg_color="transparent")
         theme_row.grid(
             row=row, column=0, sticky="w",
-            padx=4, pady=(0, _SECTION_PADY_BOTTOM),
+            padx=4, pady=HintLabel.item_pady_plain(),
         )
         row += 1
 
@@ -77,7 +74,7 @@ class GeneralTab(SettingsTab):
         )
         self._autostart_cb.grid(
             row=row, column=0, sticky="w",
-            padx=4, pady=(0, 8),
+            padx=4, pady=HintLabel.item_pady_plain(),
         )
         row += 1
 
@@ -89,7 +86,7 @@ class GeneralTab(SettingsTab):
             command=self._on_start_minimized_toggle,
         ).grid(
             row=row, column=0, sticky="w",
-            padx=4, pady=(0, 8),
+            padx=4, pady=HintLabel.item_pady_plain(),
         )
         row += 1
 
@@ -101,7 +98,7 @@ class GeneralTab(SettingsTab):
             command=self._on_minimize_to_tray_toggle,
         ).grid(
             row=row, column=0, sticky="w",
-            padx=4, pady=(0, 8),
+            padx=4, pady=HintLabel.item_pady_plain(),
         )
         row += 1
 
@@ -113,7 +110,7 @@ class GeneralTab(SettingsTab):
             command=self._on_confirm_exit_toggle,
         ).grid(
             row=row, column=0, sticky="w",
-            padx=4, pady=(0, _SECTION_PADY_BOTTOM),
+            padx=4, pady=HintLabel.item_pady_plain(),
         )
         row += 1
 
@@ -128,11 +125,11 @@ class GeneralTab(SettingsTab):
             command=self._on_hash_cache_toggle,
         ).grid(
             row=row, column=0, sticky="w",
-            padx=4, pady=(0, 4),
+            padx=4, pady=HintLabel.item_pady(),
         )
         row += 1
 
-        WrappingLabel(
+        HintLabel(
             self,
             text=(
                 "Ускоряет повторные копирования: файлы сравниваются "
@@ -140,13 +137,7 @@ class GeneralTab(SettingsTab):
                 "только при изменениях. Отключите, если нужна "
                 "побайтовая сверка при каждом запуске."
             ),
-            text_color=("gray40", "gray60"),
-            font=get_font(_HINT_FONT_SIZE),
-            h_padding=_HINT_HPADDING,
-        ).grid(
-            row=row, column=0, sticky="ew",
-            padx=4, pady=(0, _SECTION_PADY_BOTTOM),
-        )
+        ).place_in_grid(row=row)
         row += 1
 
         self._autocheck_restored_var = ctk.BooleanVar(value=False)
@@ -160,11 +151,11 @@ class GeneralTab(SettingsTab):
             command=self._on_autocheck_restored_toggle,
         ).grid(
             row=row, column=0, sticky="w",
-            padx=4, pady=(0, 4),
+            padx=4, pady=HintLabel.item_pady(),
         )
         row += 1
 
-        WrappingLabel(
+        HintLabel(
             self,
             text=(
                 "Если профиль восстановлен из резервной копии, "
@@ -175,13 +166,7 @@ class GeneralTab(SettingsTab):
                 "работает всегда. Включите, если хотите, чтобы "
                 "автопроверка выполнялась и для таких профилей."
             ),
-            text_color=("gray40", "gray60"),
-            font=get_font(_HINT_FONT_SIZE),
-            h_padding=_HINT_HPADDING,
-        ).grid(
-            row=row, column=0, sticky="ew",
-            padx=4, pady=(0, 0),
-        )
+        ).place_in_grid(row=row)
 
     def _add_section_title(self, row: int, title: str) -> int:
         ctk.CTkLabel(

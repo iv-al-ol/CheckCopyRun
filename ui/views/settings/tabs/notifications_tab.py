@@ -19,7 +19,7 @@ from config.constants import (
     NOTIFY_AUTO_CLOSE_MAX,
     NOTIFY_AUTO_CLOSE_MIN,
 )
-from ui.components.wrapping_label import WrappingLabel
+from ui.components.hint_label import HintLabel
 from ui.fonts import get_font
 from ui.palette import SURFACE_BORDER, SURFACE_RADIUS
 from ui.views.settings.tabs.base_tab import SettingsTab
@@ -52,6 +52,7 @@ class NotificationsTab(SettingsTab):
         super().__init__(master, window, **kwargs)
         self._group_widgets: list = []
         self._group_labels: list[ctk.CTkLabel] = []
+        self._group_hints: list[HintLabel] = []
         self._build()
         self._sync_from_settings()
 
@@ -108,7 +109,7 @@ class NotificationsTab(SettingsTab):
             variable=self._changes_var,
             command=self._on_changes_toggle,
         ))
-        self._changes_cb.pack(anchor="w", pady=(0, 2))
+        self._changes_cb.pack(anchor="w", pady=HintLabel.item_pady())
         self._hint(
             inner,
             "При любом изменении в папке источника придет"
@@ -122,22 +123,22 @@ class NotificationsTab(SettingsTab):
             variable=self._message_var,
             command=self._on_message_toggle,
         ))
-        self._message_cb.pack(anchor="w", pady=(_ROW_PADY, 2))
+        self._message_cb.pack(anchor="w", pady=HintLabel.item_pady())
         self._hint(
             inner,
-            "Автор папки-источника может оставить текст в этом "
+            "Автор папки источника может оставить текст в этом "
             "файле — он покажется в уведомлении. В целевую папку "
             "файл не копируется.",
         )
 
-        self._aggregate_var = ctk.BooleanVar(value=True)
+        self._aggregate_var = ctk.BooleanVar(value=False)
         self._aggregate_cb = self._track(ctk.CTkCheckBox(
             inner,
             text="Объединять изменения нескольких профилей",
             variable=self._aggregate_var,
             command=self._on_aggregate_toggle,
         ))
-        self._aggregate_cb.pack(anchor="w", pady=(_ROW_PADY, 2))
+        self._aggregate_cb.pack(anchor="w", pady=HintLabel.item_pady())
         self._hint(
             inner,
             "По всем профилям будет приходить одно общее уведомление.",
@@ -148,7 +149,7 @@ class NotificationsTab(SettingsTab):
             inner, fg_color="transparent",
         )
         self._auto_close_row.pack(
-            anchor="w", pady=(_ROW_PADY + 2, 2),
+            anchor="w", pady=HintLabel.item_pady(),
         )
 
         self._add_label(
@@ -178,7 +179,7 @@ class NotificationsTab(SettingsTab):
 
         # --- Частота опроса ---
         interval_row = ctk.CTkFrame(inner, fg_color="transparent")
-        interval_row.pack(anchor="w", pady=(_ROW_PADY + 4, 2))
+        interval_row.pack(anchor="w", pady=HintLabel.item_pady())
 
         self._add_label(
             interval_row, "Проверять каждые",
@@ -206,14 +207,14 @@ class NotificationsTab(SettingsTab):
         )
 
     def _hint(self, master, text: str) -> None:
-        """Короткое пояснение под параметром."""
-        WrappingLabel(
-            master,
-            text=text,
-            text_color=_HINT_TEXT_COLOR,
-            font=get_font(_HINT_FONT_SIZE),
-            h_padding=_HINT_HPADDING,
-        ).pack(fill="x", padx=(24, 0), pady=(0, 0))
+        """Короткое пояснение под параметром.
+
+        Горизонтальный отступ не задаётся: примечание должно
+        начинаться там же, где чекбокс, к которому относится.
+        """
+        hint = HintLabel(master, text=text)
+        hint.pack(fill="x", pady=HintLabel.pady())
+        self._group_hints.append(hint)
 
     def _add_label(
         self, master, text: str,
@@ -266,6 +267,9 @@ class NotificationsTab(SettingsTab):
         )
         for label in self._group_labels:
             label.configure(text_color=label_color)
+
+        for hint in self._group_hints:
+            hint.set_enabled(enabled)
 
     # --- Обработчики ---
 

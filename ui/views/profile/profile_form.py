@@ -15,14 +15,12 @@ from collections.abc import Callable
 import customtkinter as ctk
 
 from ui.components.button import VARIANT_SECONDARY, StyledButton
-from ui.components.wrapping_label import WrappingLabel
+from ui.components.hint_label import HintLabel
 from ui.fonts import get_font
 
 _LABEL_FONT_SIZE = 13
 _ENTRY_HEIGHT = 32
 _BROWSE_WIDTH = 110
-_HINT_FONT_SIZE = 11
-_HINT_HPADDING = 12
 
 
 class _PathRow(ctk.CTkFrame):
@@ -144,13 +142,20 @@ class ProfileForm(ctk.CTkFrame):
         )
         self._exe_row.grid(row=2, column=0, sticky="ew")
 
+        # Ритм отступов: у каждого параметра без примечания
+        # нижний отступ равен нижнему отступу примечания. У
+        # параметра с примечанием он нулевой — зазор даёт само
+        # примечание. Так интервалы одинаковы во всех формах.
         self._backup_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             self,
             text="Создавать резервную копию изменённых файлов",
             variable=self._backup_var,
             command=on_backup_toggle,
-        ).grid(row=3, column=0, sticky="w", pady=(16, 4))
+        ).grid(
+            row=3, column=0, sticky="w",
+            pady=HintLabel.item_pady_plain(),
+        )
 
         self._run_after_var = ctk.BooleanVar(value=False)
         self._run_after_cb = ctk.CTkCheckBox(
@@ -160,7 +165,8 @@ class ProfileForm(ctk.CTkFrame):
             command=on_run_after_toggle,
         )
         self._run_after_cb.grid(
-            row=4, column=0, sticky="w", pady=(4, 4),
+            row=4, column=0, sticky="w",
+            pady=HintLabel.item_pady_plain(),
         )
 
         self._check_on_startup_var = ctk.BooleanVar(value=False)
@@ -169,7 +175,10 @@ class ProfileForm(ctk.CTkFrame):
             text="Проверять директорию при запуске CheckCopyRun",
             variable=self._check_on_startup_var,
             command=on_check_on_startup_toggle,
-        ).grid(row=5, column=0, sticky="w", pady=(4, 8))
+        ).grid(
+            row=5, column=0, sticky="w",
+            pady=HintLabel.item_pady_plain(),
+        )
 
         self._mirror_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
@@ -177,20 +186,18 @@ class ProfileForm(ctk.CTkFrame):
             text="Режим зеркала",
             variable=self._mirror_var,
             command=on_mirror_toggle,
-        ).grid(row=6, column=0, sticky="w", pady=(4, 4))
+        ).grid(
+            row=6, column=0, sticky="w",
+            pady=HintLabel.item_pady(),
+        )
 
-        WrappingLabel(
+        HintLabel(
             self,
             text=(
                 "Файлы и папки, которых нет в папке источника, "
-                "будут убраны из папки. Резервные копии для "
-                "восстановления создаются принудительно, даже "
-                "если опция резервирования отключена."
+                "будут убраны из папки."
             ),
-            text_color=("gray40", "gray60"),
-            font=get_font(_HINT_FONT_SIZE),
-            h_padding=_HINT_HPADDING,
-        ).grid(row=7, column=0, sticky="ew", pady=(0, 12))
+        ).place_in_grid(row=7)
 
         self._notify_changes_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
@@ -198,7 +205,10 @@ class ProfileForm(ctk.CTkFrame):
             text="Уведомлять об изменениях файлов этого источника",
             variable=self._notify_changes_var,
             command=on_notify_changes_toggle,
-        ).grid(row=8, column=0, sticky="w", pady=(0, 4))
+        ).grid(
+            row=8, column=0, sticky="w",
+            pady=HintLabel.item_pady_plain(),
+        )
 
         self._notify_message_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
@@ -206,20 +216,18 @@ class ProfileForm(ctk.CTkFrame):
             text="Уведомлять о сообщении из !CCRun/message.txt",
             variable=self._notify_message_var,
             command=on_notify_message_toggle,
-        ).grid(row=9, column=0, sticky="w", pady=(4, 4))
+        ).grid(
+            row=9, column=0, sticky="w",
+            pady=HintLabel.item_pady(),
+        )
 
-        WrappingLabel(
+        HintLabel(
             self,
             text=(
-                "Работает только при включённых уведомлениях в "
-                "Настройки → Уведомления. Файл !CCRun/message.txt "
-                "кладёт автор папки-источника; он не копируется "
-                "в целевую папку."
+                "Файл составляется автором папки источника. "
+                "Файл не копируется в целевую папку."
             ),
-            text_color=("gray40", "gray60"),
-            font=get_font(_HINT_FONT_SIZE),
-            h_padding=_HINT_HPADDING,
-        ).grid(row=10, column=0, sticky="ew", pady=(0, 16))
+        ).place_in_grid(row=10)
 
     # --- Свойства чекбоксов ---
 

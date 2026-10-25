@@ -154,7 +154,7 @@ class ProfileView(BaseView):
         self._header = ProfileHeader(self._scroll)
         self._header.grid(
             row=0, column=0, sticky="ew",
-            padx=24, pady=(20, 12),
+            padx=24, pady=(14, 8),
         )
 
         self._form = ProfileForm(
@@ -173,7 +173,7 @@ class ProfileView(BaseView):
         )
         self._form.grid(
             row=1, column=0, sticky="ew",
-            padx=24, pady=(0, 12),
+            padx=24, pady=(0, 8),
         )
 
         self._build_version_label()
@@ -194,18 +194,21 @@ class ProfileView(BaseView):
     # --- Метка версии ---
 
     def _build_version_label(self) -> None:
+        """Метка версии живёт в шапке, справа от подписи профиля.
+
+        Отдельной строки не занимает: пока источник и целевая
+        папка не заданы, подпись говорит об этом словами, а
+        метка просто пустая. Это экономит высоту окна.
+        """
         self._version_label = ctk.CTkLabel(
-            self,
+            self._header,
             text="",
-            anchor="w",
-            justify="left",
+            anchor="e",
+            justify="right",
             font=get_font(_VERSION_FONT_SIZE, "bold"),
             text_color=("gray40", "gray60"),
         )
-        self._version_label.grid(
-            row=1, column=0, sticky="ew",
-            padx=24, pady=(0, 4),
-        )
+        self._header.set_version_label(self._version_label)
 
     def _update_version_label(
         self, profile: Profile | None,
@@ -292,16 +295,27 @@ class ProfileView(BaseView):
     # --- Разделители ---
 
     def _build_top_separator(self) -> None:
+        """Разделитель над рядом действий.
+
+        Зазор до кнопок даёт сам ряд (`PROFILE_ACTION_BAR_PADY_TOP`),
+        поэтому у разделителя отступ нулевой — иначе он складывался
+        бы из двух источников и выглядел неравномерным.
+        """
         sep = make_separator(self)
         sep.grid(
-            row=2, column=0, sticky="ew",
+            row=1, column=0, sticky="ew",
             padx=24, pady=SEPARATOR_PADY,
         )
 
     def _build_bottom_separator(self) -> None:
+        """Разделитель между рядом действий и служебным рядом.
+
+        Отступы сверху и снизу задают сами ряды, поэтому здесь
+        тоже `SEPARATOR_PADY` (0).
+        """
         sep = make_separator(self)
         sep.grid(
-            row=4, column=0, sticky="ew",
+            row=3, column=0, sticky="ew",
             padx=24, pady=SEPARATOR_PADY,
         )
 
@@ -310,7 +324,7 @@ class ProfileView(BaseView):
     def _build_action_bar(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(
-            row=3, column=0, sticky="ew",
+            row=2, column=0, sticky="ew",
             padx=24,
             pady=(
                 PROFILE_ACTION_BAR_PADY_TOP,
@@ -399,7 +413,7 @@ class ProfileView(BaseView):
     def _build_utility_bar(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(
-            row=5, column=0, sticky="ew",
+            row=4, column=0, sticky="ew",
             padx=24,
             pady=(
                 PROFILE_UTILITY_BAR_PADY_TOP,

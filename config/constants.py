@@ -93,20 +93,28 @@ HASH_CACHE_ALGORITHM = "sha256"
 
 
 # --- Разделитель ---
+# Отступ подобран так, чтобы форма профиля целиком помещалась
+# в окно минимальной высоты без полосы прокрутки.
 SEPARATOR_HEIGHT = 1
-SEPARATOR_PADY = 8
+SEPARATOR_PADY = 0
 
 
 # --- Нижняя зона профиля: два ряда кнопок ---
+# Вертикальные отступы задаются ТОЛЬКО здесь, разделители
+# рисуются вплотную (SEPARATOR_PADY = 0). Иначе зазор между
+# разделителем и кнопкой складывается из двух источников и
+# выглядит неравномерным.
+PROFILE_ROW_GAP = 8
+
 # Ряд действий: Копировать / Запустить приложение / Резервные копии
 PROFILE_ACTION_BUTTON_HEIGHT = 32
-PROFILE_ACTION_BAR_PADY_TOP = 0
-PROFILE_ACTION_BAR_PADY_BOTTOM = 8
+PROFILE_ACTION_BAR_PADY_TOP = PROFILE_ROW_GAP
+PROFILE_ACTION_BAR_PADY_BOTTOM = PROFILE_ROW_GAP
 
 # Ряд служебных: Сменить иконку / Переименовать / Сбросить / Удалить
 PROFILE_UTILITY_BUTTON_HEIGHT = 32
-PROFILE_UTILITY_BAR_PADY_TOP = 0
-PROFILE_UTILITY_BAR_PADY_BOTTOM = 12
+PROFILE_UTILITY_BAR_PADY_TOP = PROFILE_ROW_GAP
+PROFILE_UTILITY_BAR_PADY_BOTTOM = PROFILE_ROW_GAP
 
 
 # --- Сайдбар: пункты ---

@@ -24,6 +24,7 @@ class ProfileHeader(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
         self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(2, weight=0)
 
         icon_frame = ctk.CTkFrame(
             self,
@@ -67,6 +68,19 @@ class ProfileHeader(ctk.CTkFrame):
             font=get_font(11),
         )
         self._subtitle_label.grid(row=1, column=1, sticky="w")
+
+    def set_version_label(self, label: ctk.CTkLabel) -> None:
+        """Ставит метку версии в одну строку с подписью.
+
+        Метку создаёт ProfileView: расчёт идёт в фоне, это его
+        ответственность. Шапка лишь размещает её справа от
+        подписи, чтобы не занимать отдельную строку по высоте.
+        """
+        self._version_label = label
+        try:
+            label.grid_configure(row=1, column=2, sticky="e")
+        except Exception as exc:
+            logger.debug("version label grid: %r", exc)
 
     def update(self, profile: Profile, subtitle: str) -> None:
         self._name_label.configure(text=profile.display_name)
