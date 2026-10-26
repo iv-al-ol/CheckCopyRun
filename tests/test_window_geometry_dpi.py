@@ -1,16 +1,21 @@
 """Тесты DPI-логики геометрии окна.
 
 Проверяются чистые функции: пересчёт виртуального экрана в
-логические пиксели, конвертация геометрии и клампинг минимума
-по рабочей области. Tkinter не требуется — окно подменяется
-заглушкой.
+логические пиксели, конвертация геометрии, стартовый размер по
+дефолту и клампинг минимума по рабочей области. Tkinter не
+требуется — окно подменяется заглушкой.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from config.constants import WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH
+from config.constants import (
+    WINDOW_DEFAULT_HEIGHT,
+    WINDOW_DEFAULT_WIDTH,
+    WINDOW_MIN_HEIGHT,
+    WINDOW_MIN_WIDTH,
+)
 from ui import window_geometry
 
 
@@ -132,7 +137,6 @@ def test_window_inside_is_visible(
     patch_virtual_screen, scaling,
 ):
     patch_virtual_screen((0, 0, 1920, 1080))
-    # Логический экран: 1920/scaling на 1080/scaling.
     assert window_geometry.is_inside_virtual_screen(
         0, 0, 400, 300, scaling,
     )
@@ -143,7 +147,6 @@ def test_window_far_right_is_hidden(
     patch_virtual_screen, scaling,
 ):
     patch_virtual_screen((0, 0, 1920, 1080))
-    # Координата заведомо правее логической ширины экрана.
     far_x = int(1920 / scaling) + 500
     assert not window_geometry.is_inside_virtual_screen(
         far_x, 0, 400, 300, scaling,
@@ -163,7 +166,6 @@ def test_partial_overlap_counts_as_visible(
 ):
     patch_virtual_screen((0, 0, 1920, 1080))
     logical_w = int(1920 / scaling)
-    # Окно свисает вправо, но перекрытие больше _MIN_VISIBLE_PX.
     x = logical_w - 150
     assert window_geometry.is_inside_virtual_screen(
         x, 0, 400, 300, scaling,
@@ -229,9 +231,7 @@ def test_effective_min_size_small_high_dpi_screen(
     patch_work_area((1366, 728))
     window = _FakeWindow()
     width, height = window_geometry.effective_min_size(window)
-    # Ширина 911 больше номинала — остаётся 900.
     assert width == WINDOW_MIN_WIDTH
-    # Высота 485 меньше номинала 560 — ужимается под рабочую область.
     assert height == int(728 / 1.5)
     assert height < WINDOW_MIN_HEIGHT
 
@@ -256,7 +256,10 @@ def test_apply_default_geometry_centers_in_work_area(
     patch_work_area((1920, 1040))
     window = _FakeWindow()
     window_geometry.apply_default_geometry(window)
-    assert window.geometry_value == "900x560+510+240"
+    # Дефолтная высота 720, ширина 900.
+    # x = (1920 - 900) // 2 = 510
+    # y = (1040 - 720) // 2 = 160
+    assert window.geometry_value == "900x720+510+160"
 
 
 def test_apply_default_geometry_clips_to_work_area(
@@ -277,7 +280,27 @@ def test_apply_default_geometry_fallback_without_work_area(
     patch_work_area(None)
     window = _FakeWindow(screen_w=1920, screen_h=1080)
     window_geometry.apply_default_geometry(window)
-    assert window.geometry_value == "900x560+510+260"
+    # x = (1920 - 900) // 2 = 510
+    # y = (1080 - 720) // 2 = 180
+    assert window.geometry_value == "900x720+510+180"
+
+
+def test_apply_default_geometry_respects_min_size_on_tiny_screen(
+    patch_scaling, patch_work_area,
+):
+    """Экран меньше дефолта — окно клампится к рабочей области."""
+    patch_scaling(1.0)
+    patch_work_area((640, 400))
+    window = _FakeWindow()
+    window_geometry.apply_default_geometry(window)
+    # min_w=640, min_h=400 (кламп effective_min_size).
+    assert window.geometry_value == "640x400+0+0"
+
+
+def test_default_size_larger_than_min():
+    """Инвариант: дефолт больше минимума — форма профиля без скролла."""
+    assert WINDOW_DEFAULT_WIDTH >= WINDOW_MIN_WIDTH
+    assert WINDOW_DEFAULT_HEIGHT >= WINDOW_MIN_HEIGHT
 
 
 # --- try_restore_geometry ---

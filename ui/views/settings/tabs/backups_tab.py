@@ -1,8 +1,13 @@
-"""Вкладка «Бэкапы»: политика хранения !Backup_* папок.
+"""Вкладка «Бэкапы»: политика хранения состояний CAS.
 
-Каждая опция — чекбокс + поле ввода + единица в одной строке:
-  [✓] Хранить последние     [10] бэкапов
-  [✓] Удалять бэкапы старше [30] дней
+Каждая опция — отдельная горизонтальная строка:
+  [✓] Хранить последние      [10] бэкапов
+  [✓] Удалять бэкапы старше  [30] дней
+
+Строка параметра — собственный CTkFrame, чтобы поле ввода было
+прижато к тексту своего чекбокса. Если раскладывать параметры
+прямо в grid вкладки, колонка подстраивается под самый длинный
+чекбокс, и у коротких подписей поле отъезжает вправо.
 
 Политика глобальная, но применяется к destination каждого профиля
 отдельно — у каждого свои бэкапы.
@@ -25,11 +30,6 @@ _BODY_FONT_SIZE = 13
 _ENTRY_WIDTH = 60
 _SECTION_PADY_TOP = 8
 
-# Чекбокс + поле + единица занимают три колонки, четвёртая —
-# пустая и растягиваемая. Примечание растягивается на все.
-_COLUMNS = 3
-_SPACER_COLUMN = 3
-
 _KEEP_LAST_MIN = 1
 _KEEP_LAST_MAX = 1000
 _DELETE_OLDER_MIN = 1
@@ -48,11 +48,11 @@ class BackupsTab(SettingsTab):
 
     def _build(self) -> None:
         row = 0
-        # Базовый класс растягивает колонку 0; здесь растяжение
-        # должно быть у пустой колонки справа, иначе поле ввода
-        # отъезжает от своего чекбокса.
-        self.grid_columnconfigure(0, weight=0)
-        self.grid_columnconfigure(_SPACER_COLUMN, weight=1)
+        # Одна колонка на всю ширину: каждая строка занимает её
+        # целиком. Поле ввода прижато к своему чекбоксу через
+        # pack внутри строки, а не выравнивается по соседям
+        # через grid.
+        self.grid_columnconfigure(0, weight=1)
 
         # Заголовок секции.
         ctk.CTkLabel(
@@ -67,27 +67,25 @@ class BackupsTab(SettingsTab):
         row += 1
 
         # --- «Хранить последние N бэкапов» ---
-        # Параметры размещаются прямо в сетке вкладки, без
-        # промежуточного фрейма: фрейм добавлял 5 px высоты, и
-        # зазор до примечания отличался от других вкладок.
-        self._keep_last_var = ctk.BooleanVar(value=False)
-        self._keep_last_cb = ctk.CTkCheckBox(
-            self,
-            text="Хранить последние",
-            variable=self._keep_last_var,
-            command=self._on_keep_last_toggle,
-        )
-        self._keep_last_cb.grid(
+        keep_row = ctk.CTkFrame(self, fg_color="transparent")
+        keep_row.grid(
             row=row, column=0, sticky="w",
             padx=4, pady=HintLabel.item_pady_plain(),
         )
 
+        self._keep_last_var = ctk.BooleanVar(value=False)
+        self._keep_last_cb = ctk.CTkCheckBox(
+            keep_row,
+            text="Хранить последние",
+            variable=self._keep_last_var,
+            command=self._on_keep_last_toggle,
+        )
+        self._keep_last_cb.pack(side="left")
+
         self._keep_last_entry = ctk.CTkEntry(
-            self, width=_ENTRY_WIDTH,
+            keep_row, width=_ENTRY_WIDTH,
         )
-        self._keep_last_entry.grid(
-            row=row, column=1, sticky="w", padx=(8, 6),
-        )
+        self._keep_last_entry.pack(side="left", padx=(8, 6))
         self._keep_last_entry.bind(
             "<Return>", self._on_keep_last_commit,
         )
@@ -96,30 +94,31 @@ class BackupsTab(SettingsTab):
         )
 
         ctk.CTkLabel(
-            self, text="бэкапов",
+            keep_row, text="бэкапов",
             font=get_font(_BODY_FONT_SIZE),
-        ).grid(row=row, column=2, sticky="w")
+        ).pack(side="left")
         row += 1
 
         # --- «Удалять бэкапы старше X дней» ---
-        self._delete_older_var = ctk.BooleanVar(value=False)
-        self._delete_older_cb = ctk.CTkCheckBox(
-            self,
-            text="Удалять бэкапы старше",
-            variable=self._delete_older_var,
-            command=self._on_delete_older_toggle,
-        )
-        self._delete_older_cb.grid(
+        delete_row = ctk.CTkFrame(self, fg_color="transparent")
+        delete_row.grid(
             row=row, column=0, sticky="w",
             padx=4, pady=HintLabel.item_pady_plain(),
         )
 
+        self._delete_older_var = ctk.BooleanVar(value=False)
+        self._delete_older_cb = ctk.CTkCheckBox(
+            delete_row,
+            text="Удалять бэкапы старше",
+            variable=self._delete_older_var,
+            command=self._on_delete_older_toggle,
+        )
+        self._delete_older_cb.pack(side="left")
+
         self._delete_older_entry = ctk.CTkEntry(
-            self, width=_ENTRY_WIDTH,
+            delete_row, width=_ENTRY_WIDTH,
         )
-        self._delete_older_entry.grid(
-            row=row, column=1, sticky="w", padx=(8, 6),
-        )
+        self._delete_older_entry.pack(side="left", padx=(8, 6))
         self._delete_older_entry.bind(
             "<Return>", self._on_delete_older_commit,
         )
@@ -128,9 +127,9 @@ class BackupsTab(SettingsTab):
         )
 
         ctk.CTkLabel(
-            self, text="дней",
+            delete_row, text="дней",
             font=get_font(_BODY_FONT_SIZE),
-        ).grid(row=row, column=2, sticky="w")
+        ).pack(side="left")
         row += 1
 
         # --- Справка (растягивается по ширине) ---
@@ -144,9 +143,7 @@ class BackupsTab(SettingsTab):
                 "Ошибки удаления (папка занята, нет прав) пишутся "
                 "в лог, копирование не блокируется."
             ),
-        ).place_in_grid(
-            row=row, columnspan=_SPACER_COLUMN + 1,
-        )
+        ).place_in_grid(row=row)
 
     # --- Синхронизация ---
 

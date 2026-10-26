@@ -22,7 +22,12 @@ import re
 
 import customtkinter as ctk
 
-from config.constants import WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH
+from config.constants import (
+    WINDOW_DEFAULT_HEIGHT,
+    WINDOW_DEFAULT_WIDTH,
+    WINDOW_MIN_HEIGHT,
+    WINDOW_MIN_WIDTH,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -195,12 +200,18 @@ def effective_min_size(window) -> tuple[int, int]:
 # --- Операции с окном ---
 
 def apply_default_geometry(window) -> None:
-    """Стартовый размер — минимальный, по центру рабочей области.
+    """Стартовый размер — `WINDOW_DEFAULT_*`, по центру рабочей области.
 
-    Значения в логических пикселях: CTk умножит их на DPI-scaling
-    при установке.
+    Дефолтный размер больше минимального: форма профиля со
+    всеми примечаниями помещается без полосы прокрутки. На
+    маленьком экране или высоком DPI клампится по рабочей
+    области — пользователь увидит скроллбар, но интерфейс
+    останется рабочим.
+
+    Значения в логических пикселях: CTk умножит их на
+    DPI-scaling при установке.
     """
-    w, h = effective_min_size(window)
+    min_w, min_h = effective_min_size(window)
 
     scaling = get_dpi_scaling(window) or 1.0
     work = get_work_area_logical(window)
@@ -212,10 +223,14 @@ def apply_default_geometry(window) -> None:
             sh = int(window.winfo_screenheight() / scaling)
         except Exception as exc:
             logger.debug("размер экрана недоступен: %r", exc)
-            sw, sh = w, h
+            sw = WINDOW_DEFAULT_WIDTH
+            sh = WINDOW_DEFAULT_HEIGHT
 
-    w = min(w, sw)
-    h = min(h, sh)
+    # Клампим дефолт по рабочей области и по минимальному
+    # размеру: окно не должно вылезать за экран и не должно
+    # быть меньше minsize.
+    w = max(min_w, min(WINDOW_DEFAULT_WIDTH, sw))
+    h = max(min_h, min(WINDOW_DEFAULT_HEIGHT, sh))
 
     x = max(0, (sw - w) // 2)
     y = max(0, (sh - h) // 2)

@@ -4,8 +4,21 @@
 копии) находятся в ProfileView, не в форме — они привязаны к
 низу окна, не входят в прокручиваемую область.
 
+Все кнопки в форме — одной ширины (`PROFILE_FORM_BUTTON_WIDTH`).
+Это единая точка изменения: поменяли константу — поменялось
+у всех (и в форме, и в action/utility bar в ProfileView).
+
 Чекбокс «Запускать приложение после копирования» неактивен,
 пока не выбрано запускаемое приложение.
+
+Чекбокс «Уведомлять о сообщении из !CCRun/message.txt» и
+кнопка «Создать message.txt» стоят в одной строке: кнопка
+справа, ширина у неё та же, что у остальных.
+
+Уведомления о профиле по умолчанию выключены: пользователь
+сам решает, следить ли за источником. Так профиль с папкой
+на файловом сервере не начинает молча опрашивать чужой
+ресурс без явного согласия.
 """
 
 from __future__ import annotations
@@ -14,13 +27,14 @@ from collections.abc import Callable
 
 import customtkinter as ctk
 
+from config.constants import PROFILE_FORM_BUTTON_WIDTH
 from ui.components.button import VARIANT_SECONDARY, StyledButton
 from ui.components.hint_label import HintLabel
 from ui.fonts import get_font
 
 _LABEL_FONT_SIZE = 13
 _ENTRY_HEIGHT = 32
-_BROWSE_WIDTH = 110
+_MESSAGE_BUTTON_HEIGHT = 28
 
 
 class _PathRow(ctk.CTkFrame):
@@ -61,7 +75,8 @@ class _PathRow(ctk.CTkFrame):
 
         StyledButton(
             self, text=pick_text,
-            variant=VARIANT_SECONDARY, width=_BROWSE_WIDTH,
+            variant=VARIANT_SECONDARY,
+            width=PROFILE_FORM_BUTTON_WIDTH,
             command=on_pick,
         ).grid(
             row=1, column=1, sticky="e",
@@ -72,7 +87,8 @@ class _PathRow(ctk.CTkFrame):
         if on_open is not None:
             self._open_btn = StyledButton(
                 self, text="Открыть папку",
-                variant=VARIANT_SECONDARY, width=_BROWSE_WIDTH,
+                variant=VARIANT_SECONDARY,
+                width=PROFILE_FORM_BUTTON_WIDTH,
                 command=on_open,
             )
             self._open_btn.grid(row=1, column=2, sticky="e")
@@ -107,9 +123,11 @@ class ProfileForm(ctk.CTkFrame):
         on_backup_toggle: Callable[[], None],
         on_run_after_toggle: Callable[[], None],
         on_check_on_startup_toggle: Callable[[], None],
+        on_check_periodically_toggle: Callable[[], None],
         on_mirror_toggle: Callable[[], None],
         on_notify_changes_toggle: Callable[[], None],
         on_notify_message_toggle: Callable[[], None],
+        on_create_message_file: Callable[[], None],
     ):
         super().__init__(master, fg_color="transparent")
         self.grid_columnconfigure(0, weight=1)
@@ -142,10 +160,6 @@ class ProfileForm(ctk.CTkFrame):
         )
         self._exe_row.grid(row=2, column=0, sticky="ew")
 
-        # Ритм отступов: у каждого параметра без примечания
-        # нижний отступ равен нижнему отступу примечания. У
-        # параметра с примечанием он нулевой — зазор даёт само
-        # примечание. Так интервалы одинаковы во всех формах.
         self._backup_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             self,
@@ -157,6 +171,36 @@ class ProfileForm(ctk.CTkFrame):
             pady=HintLabel.item_pady_plain(),
         )
 
+        self._check_on_startup_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self,
+            text="Проверять директорию при запуске CheckCopyRun",
+            variable=self._check_on_startup_var,
+            command=on_check_on_startup_toggle,
+        ).grid(
+            row=4, column=0, sticky="w",
+            pady=HintLabel.item_pady_plain(),
+        )
+
+        self._check_periodically_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self,
+            text="Периодически проверять директорию",
+            variable=self._check_periodically_var,
+            command=on_check_periodically_toggle,
+        ).grid(
+            row=5, column=0, sticky="w",
+            pady=HintLabel.item_pady(),
+        )
+
+        HintLabel(
+            self,
+            text=(
+                "Выполняется периодическая проверка изменений "
+                "в директории. Период проверки задается в настройках."
+            ),
+        ).place_in_grid(row=6, padx=0)
+
         self._run_after_var = ctk.BooleanVar(value=False)
         self._run_after_cb = ctk.CTkCheckBox(
             self,
@@ -165,18 +209,7 @@ class ProfileForm(ctk.CTkFrame):
             command=on_run_after_toggle,
         )
         self._run_after_cb.grid(
-            row=4, column=0, sticky="w",
-            pady=HintLabel.item_pady_plain(),
-        )
-
-        self._check_on_startup_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            self,
-            text="Проверять директорию при запуске CheckCopyRun",
-            variable=self._check_on_startup_var,
-            command=on_check_on_startup_toggle,
-        ).grid(
-            row=5, column=0, sticky="w",
+            row=7, column=0, sticky="w",
             pady=HintLabel.item_pady_plain(),
         )
 
@@ -187,7 +220,7 @@ class ProfileForm(ctk.CTkFrame):
             variable=self._mirror_var,
             command=on_mirror_toggle,
         ).grid(
-            row=6, column=0, sticky="w",
+            row=8, column=0, sticky="w",
             pady=HintLabel.item_pady(),
         )
 
@@ -197,28 +230,48 @@ class ProfileForm(ctk.CTkFrame):
                 "Файлы и папки, которых нет в папке источника, "
                 "будут убраны из папки."
             ),
-        ).place_in_grid(row=7, padx=0)
+        ).place_in_grid(row=9, padx=0)
 
-        self._notify_changes_var = ctk.BooleanVar(value=True)
+        # Уведомления по умолчанию выключены.
+        self._notify_changes_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             self,
             text="Уведомлять об изменениях файлов этого источника",
             variable=self._notify_changes_var,
             command=on_notify_changes_toggle,
         ).grid(
-            row=8, column=0, sticky="w",
+            row=10, column=0, sticky="w",
             pady=HintLabel.item_pady_plain(),
         )
 
-        self._notify_message_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            self,
+        self._notify_message_var = ctk.BooleanVar(value=False)
+        notify_msg_row = ctk.CTkFrame(self, fg_color="transparent")
+        notify_msg_row.grid(
+            row=11, column=0, sticky="ew",
+            pady=HintLabel.item_pady(),
+        )
+        notify_msg_row.grid_columnconfigure(0, weight=1)
+
+        self._notify_message_cb = ctk.CTkCheckBox(
+            notify_msg_row,
             text="Уведомлять о сообщении из !CCRun/message.txt",
             variable=self._notify_message_var,
             command=on_notify_message_toggle,
-        ).grid(
-            row=9, column=0, sticky="w",
-            pady=HintLabel.item_pady(),
+        )
+        self._notify_message_cb.grid(
+            row=0, column=0, sticky="w",
+        )
+
+        self._create_message_btn = StyledButton(
+            notify_msg_row,
+            text="Создать message.txt",
+            variant=VARIANT_SECONDARY,
+            width=PROFILE_FORM_BUTTON_WIDTH,
+            height=_MESSAGE_BUTTON_HEIGHT,
+            command=on_create_message_file,
+        )
+        self._create_message_btn.grid(
+            row=0, column=1, sticky="e", padx=(8, 0),
         )
 
         HintLabel(
@@ -227,7 +280,7 @@ class ProfileForm(ctk.CTkFrame):
                 "Файл составляется автором папки источника. "
                 "Файл не копируется в целевую папку."
             ),
-        ).place_in_grid(row=10, padx=0)
+        ).place_in_grid(row=12, padx=0)
 
     # --- Свойства чекбоксов ---
 
@@ -242,6 +295,10 @@ class ProfileForm(ctk.CTkFrame):
     @property
     def check_on_startup(self) -> bool:
         return bool(self._check_on_startup_var.get())
+
+    @property
+    def check_periodically(self) -> bool:
+        return bool(self._check_periodically_var.get())
 
     @property
     def mirror_mode(self) -> bool:
@@ -270,15 +327,17 @@ class ProfileForm(ctk.CTkFrame):
         create_backup: bool,
         run_after_copy: bool,
         check_on_startup: bool,
+        check_periodically: bool = False,
         mirror_mode: bool,
-        notify_on_changes: bool = True,
-        notify_on_message: bool = True,
+        notify_on_changes: bool = False,
+        notify_on_message: bool = False,
     ) -> None:
         self._source_row.set_value(source)
         self._dest_row.set_value(destination)
         self._exe_row.set_value(exe_name)
         self._backup_var.set(create_backup)
         self._check_on_startup_var.set(check_on_startup)
+        self._check_periodically_var.set(check_periodically)
         self._mirror_var.set(mirror_mode)
         self._notify_changes_var.set(notify_on_changes)
         self._notify_message_var.set(notify_on_message)

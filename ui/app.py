@@ -164,6 +164,7 @@ class MainWindow(ctk.CTk):
                 build_fallback_notifier(self._tray),
             ]),
             is_busy=self._is_profile_busy,
+            on_periodic_copy=self._on_periodic_copy,
             scheduler=lambda fn: self.after(0, fn),
         )
         self.monitor.configure(
@@ -312,12 +313,7 @@ class MainWindow(ctk.CTk):
         on_done: Callable[[RestoreResult], None],
         on_error: Callable[[str], None] | None = None,
     ) -> bool:
-        """Запускает восстановление к указанному state.
-
-        Перед изменениями destination автоматически создаётся
-        restore_point (точка возврата) — при неудаче restore
-        можно откатить.
-        """
+        """Запускает восстановление к указанному state."""
         if self.copy_service.is_running:
             self.set_status("Копирование уже выполняется")
             return False
@@ -605,6 +601,10 @@ class MainWindow(ctk.CTk):
             logger.debug(
                 "reset_monitor_profile(%r): %r", profile_id, exc,
             )
+
+    def _on_periodic_copy(self, profile: Profile) -> None:
+        """Запускает периодическое копирование по таймеру."""
+        self.after(0, lambda: self.run_with_check(profile.id))
 
     def refresh_main_view(self) -> None:
         view = self.router.get_view("main")

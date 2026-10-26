@@ -11,6 +11,7 @@ from config.constants import (
     HASH_CACHE_ENABLED_DEFAULT,
     MONITOR_INTERVAL_DEFAULT,
     NOTIFY_AUTO_CLOSE_DEFAULT,
+    THEME_DEFAULT,
 )
 
 
@@ -40,13 +41,16 @@ class Profile:
 
     run_after_copy: bool = False
     check_on_startup: bool = False
+    check_periodically: bool = False
 
     mirror_mode: bool = False
 
-    # Уведомления по этому профилю (перекрывают глобальные
-    # выключатели каналов, см. AppSettings).
-    notify_on_changes: bool = True
-    notify_on_message: bool = True
+    # Уведомления по этому профилю. По умолчанию выключены:
+    # пользователь сам решает, следить ли за источником. Так
+    # профиль с папкой на файловом сервере не начинает молча
+    # опрашивать чужой ресурс без явного согласия.
+    notify_on_changes: bool = False
+    notify_on_message: bool = False
 
     pinned: bool = False
     last_used_at: str = ""
@@ -117,7 +121,7 @@ class Profile:
 @dataclass
 class AppSettings:
     version: int = 1
-    theme: str = "dark"
+    theme: str = THEME_DEFAULT
     confirm_on_exit: bool = False
     window_geometry: str = ""
     hash_cache_enabled: bool = HASH_CACHE_ENABLED_DEFAULT
@@ -133,11 +137,16 @@ class AppSettings:
     notify_message: bool = True
     notify_aggregate: bool = True
 
-    # Секунды до автоскрытия; 0 — не скрывать автоматически.
     notify_auto_close_sec: int = NOTIFY_AUTO_CLOSE_DEFAULT
     monitor_interval_min: int = MONITOR_INTERVAL_DEFAULT
 
-    backup_keep_last_enabled: bool = False
+    # Политика хранения состояний. «Хранить последние N»
+    # включено по умолчанию: без неё CAS-хранилище растёт
+    # бесконтрольно (каждое копирование с изменениями создаёт
+    # новое состояние). «Удалять старше N дней» оставлено
+    # выключенным — это агрессивнее, может снести единственную
+    # копию какого-то файла.
+    backup_keep_last_enabled: bool = True
     backup_keep_last_n: int = 10
     backup_delete_older_enabled: bool = False
     backup_delete_older_days: int = 30

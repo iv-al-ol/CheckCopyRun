@@ -9,11 +9,24 @@
     (`-topmost`), не забирает фокус;
   • показывается даже если главное окно свёрнуто в трей;
   • `auto_close_sec == 0` — уведомление висит, пока его не
-    закроют кликом; иначе угасает через заданное время;
-  • несколько уведомлений выстраиваются стопкой снизу вверх.
+    закроют; иначе угасает через заданное время;
+  • несколько уведомлений выстраиваются стопкой снизу вверх —
+    без перекрытий. Позиции пересчитываются при каждом
+    появлении и закрытии;
+  • стопка прижата к рабочей области монитора (без панели
+    задач) — WinAPI SPI_GETWORKAREA через
+    `ui.window_geometry.get_work_area_logical`;
+  • одновременно не более `NOTIFY_MAX_ACTIVE_TOASTS` окон;
+  • кнопки «Открыть» (если `Notification.open_path` задан) и
+    «Закрыть». «Открыть» использует
+    `services.system.file_opener.open_file_with_fallback`
+    (ассоциация → Блокнот → Проводник); при полном провале
+    показывает диалог с путём и закрывает тост. «Закрыть» —
+    просто закрывает. Клик по телу уведомления (вне кнопок)
+    тоже закрывает.
 
-Работает только в главном потоке Tk: [`ToastNotifier`](ui/components/toast.py)
-ставит показ в очередь через `after(0, …)`.
+Работает только в главном потоке Tk: `ToastNotifier` ставит
+показ в очередь через `after(0, …)`.
 """
 
 from __future__ import annotations
@@ -26,15 +39,27 @@ from config.constants import (
     NOTIFY_FADE_IN_MS,
     NOTIFY_FADE_OUT_MS,
     NOTIFY_FADE_STEP_MS,
+    NOTIFY_MAX_ACTIVE_TOASTS,
 )
+from services.system.file_opener import open_file_with_fallback
 from services.system.notifier import Notification
-from ui.dialogs._centering import get_scaling
+from ui.components.button import (
+    VARIANT_PRIMARY,
+    VARIANT_SECONDARY,
+    StyledButton,
+)
+from ui.dialogs import show_error
 from ui.fonts import get_font
 from ui.palette import SURFACE_BG, SURFACE_BORDER, SURFACE_RADIUS
+from ui.window_geometry import (
+    get_dpi_scaling,
+    get_work_area_logical,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Логические пиксели.
 _WIDTH = 360
 _MIN_HEIGHT = 84
 _MAX_HEIGHT = 320
@@ -42,15 +67,17 @@ _MARGIN_X = 20
 _MARGIN_Y = 20
 _STACK_GAP = 10
 
+_MAX_ACTIVE_TOASTS = NOTIFY_MAX_ACTIVE_TOASTS
+
 _TITLE_FONT_SIZE = 13
 _BODY_FONT_SIZE = 12
-_HINT_FONT_SIZE = 11
+_BUTTON_FONT_SIZE = 11
 _PADDING = 14
-_HINT_PADDING = 6
+_BUTTON_GAP = 6
 
-_CLOSE_HINT = "Клик — закрыть"
+_BUTTON_WIDTH = 90
+_BUTTON_HEIGHT = 26
 
-_ALPHA_STEP_TARGET = 60.0
 _MIN_ALPHA = 0.0
 _MAX_ALPHA = 0.96
 
@@ -63,17 +90,29 @@ class ToastWindow(ctk.CTkToplevel):
         master,
         notification: Notification,
         *,
-        offset_index: int = 0,
         on_closed=None,
     ):
         super().__init__(master)
 
         self._notification = notification
-        self._offset_index = offset_index
         self._on_closed = on_closed
         self._closing = False
         self._alpha = _MIN_ALPHA
         self._jobs: list[str] = []
+
+        # Масштаб фиксируем один раз в конструкторе: у тоста
+        # он не меняется за время жизни.
+        self._scaling = get_dpi_scaling(self) or 1.0
+
+        # Высота в физических пикселях — её использует менеджер
+        # для расчёта отступа снизу. Обновляется после постройки.
+        self._height_physical = int(
+            _MIN_HEIGHT * self._scaling
+        )
+
+        # Отступ от низа рабочей области в физических пикселях.
+        # Ставит менеджер через set_bottom_offset_physical().
+        self._y_bottom_offset_phys = 0
 
         self.withdraw()
         self.overrideredirect(True)
@@ -84,13 +123,33 @@ class ToastWindow(ctk.CTkToplevel):
         self._set_alpha(_MIN_ALPHA)
 
         self._build()
-
-        self.bind("<Button-1>", lambda _e: self.dismiss())
-        for child in self.winfo_children():
-            child.bind("<Button-1>", lambda _e: self.dismiss())
+        self._bind_body_click()
 
         self.update_idletasks()
+        self._height_physical = self._measure_height_physical()
+
+    # --- Публичное ---
+
+    @property
+    def height_physical(self) -> int:
+        return self._height_physical
+
+    @property
+    def scaling(self) -> float:
+        return self._scaling
+
+    def set_bottom_offset_physical(self, offset_phys: int) -> None:
+        """Отступ от низа рабочей области (физические px)."""
+        self._y_bottom_offset_phys = int(offset_phys)
         self._position()
+
+    def present(self) -> None:
+        """Показать окно и запустить анимацию появления.
+
+        Позицию менеджер уже выставил через
+        set_bottom_offset_physical — здесь только deiconify
+        и fade-in.
+        """
         self.deiconify()
         self._fade_in()
 
@@ -111,19 +170,20 @@ class ToastWindow(ctk.CTkToplevel):
         frame.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        ctk.CTkLabel(
+        self._title_label = ctk.CTkLabel(
             frame,
             text=self._notification.title,
             anchor="w",
             justify="left",
             font=get_font(_TITLE_FONT_SIZE, "bold"),
-        ).grid(
+        )
+        self._title_label.grid(
             row=0, column=0, sticky="ew",
             padx=(_PADDING, _PADDING),
             pady=(_PADDING, 4),
         )
 
-        body = ctk.CTkLabel(
+        self._body_label = ctk.CTkLabel(
             frame,
             text=self._notification.body,
             anchor="w",
@@ -131,65 +191,142 @@ class ToastWindow(ctk.CTkToplevel):
             wraplength=self._wrap_length(),
             font=get_font(_BODY_FONT_SIZE),
         )
-        body.grid(
+        self._body_label.grid(
             row=1, column=0, sticky="ew",
             padx=(_PADDING, _PADDING),
         )
 
-        hint = ctk.CTkLabel(
-            frame,
-            text=_CLOSE_HINT,
-            anchor="w",
-            text_color=("gray45", "gray55"),
-            font=get_font(_HINT_FONT_SIZE),
-        )
-        hint.grid(
-            row=2, column=0, sticky="w",
+        btns_box = ctk.CTkFrame(frame, fg_color="transparent")
+        btns_box.grid(
+            row=2, column=0, sticky="e",
             padx=(_PADDING, _PADDING),
-            pady=(_HINT_PADDING, _PADDING),
+            pady=(8, _PADDING),
         )
+
+        if self._notification.open_path:
+            self._open_btn = StyledButton(
+                btns_box,
+                text="Открыть",
+                variant=VARIANT_PRIMARY,
+                width=_BUTTON_WIDTH,
+                height=_BUTTON_HEIGHT,
+                font=get_font(_BUTTON_FONT_SIZE),
+                command=self._on_open,
+            )
+            self._open_btn.pack(
+                side="left", padx=(0, _BUTTON_GAP),
+            )
+
+        self._close_btn = StyledButton(
+            btns_box,
+            text="Закрыть",
+            variant=VARIANT_SECONDARY,
+            width=_BUTTON_WIDTH,
+            height=_BUTTON_HEIGHT,
+            font=get_font(_BUTTON_FONT_SIZE),
+            command=self.dismiss,
+        )
+        self._close_btn.pack(side="left")
+
+        self._body_widgets = [
+            frame,
+            self._title_label,
+            self._body_label,
+        ]
+
+    def _bind_body_click(self) -> None:
+        for widget in self._body_widgets:
+            widget.bind(
+                "<Button-1>",
+                lambda _e: self.dismiss(),
+                add="+",
+            )
 
     def _wrap_length(self) -> int:
-        scaling = get_scaling(self) or 1.0
-        return int((_WIDTH - 2 * _PADDING - 8) * scaling)
+        return int(
+            (_WIDTH - 2 * _PADDING - 8) * self._scaling,
+        )
 
-    def _measure_height(self) -> int:
-        """Высота по содержимому, с ограничением диапазона."""
+    def _measure_height_physical(self) -> int:
+        """Фактическая высота в физических пикселях (с клампом)."""
         try:
             self.update_idletasks()
             needed = int(self.winfo_reqheight())
         except Exception as exc:
             logger.debug("toast reqheight: %r", exc)
-            needed = _MIN_HEIGHT
-        return max(_MIN_HEIGHT, min(_MAX_HEIGHT, needed))
+            needed = int(_MIN_HEIGHT * self._scaling)
+
+        min_phys = int(_MIN_HEIGHT * self._scaling)
+        max_phys = int(_MAX_HEIGHT * self._scaling)
+        if needed < min_phys:
+            needed = min_phys
+        if needed > max_phys:
+            needed = max_phys
+        return needed
 
     # --- Геометрия ---
 
     def _position(self) -> None:
-        """Правый нижний угол рабочей области, стопкой вверх."""
-        scaling = get_scaling(self) or 1.0
-        try:
-            screen_w = int(self.winfo_screenwidth())
-            screen_h = int(self.winfo_screenheight())
-        except Exception as exc:
-            logger.debug("toast screen size: %r", exc)
-            return
+        """Позиция: правый нижний угол рабочей области, стопкой."""
+        scaling = self._scaling
+        work = get_work_area_logical(self)
+        if work is not None:
+            screen_w_phys = int(work[0] * scaling)
+            screen_h_phys = int(work[1] * scaling)
+        else:
+            try:
+                screen_w_phys = int(self.winfo_screenwidth())
+                screen_h_phys = int(self.winfo_screenheight())
+            except Exception as exc:
+                logger.debug("toast screen size: %r", exc)
+                return
 
-        width = int(_WIDTH * scaling)
-        height = self._measure_height()
-
-        x = screen_w - width - int(_MARGIN_X * scaling)
-        y = (
-            screen_h
-            - height
-            - int((_MARGIN_Y + _STACK_GAP * self._offset_index)
-                  * scaling)
+        width_phys = int(round(_WIDTH * scaling))
+        x_phys = (
+            screen_w_phys - width_phys
+            - int(round(_MARGIN_X * scaling))
+        )
+        y_phys = (
+            screen_h_phys
+            - self._height_physical
+            - int(round(_MARGIN_Y * scaling))
+            - self._y_bottom_offset_phys
         )
 
         try:
-            self.wm_geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
+            self.wm_geometry(
+                f"{width_phys}x{self._height_physical}"
+                f"+{max(0, x_phys)}+{max(0, y_phys)}"
+            )
         except Exception as exc:
             logger.error("toast wm_geometry: %r", exc)
+
+    # --- Действия ---
+
+    def _on_open(self) -> None:
+        """Открывает файл из `open_path`, закрывает тост.
+
+        Цепочка способов — в `services.system.file_opener`
+        (ассоциация → Блокнот → Проводник). Если ни один не
+        сработал, показываем модальный диалог с путём — чтобы
+        пользователь мог скопировать и открыть вручную. Тост
+        закрываем в любом случае: пользователь уже нажал
+        кнопку, держать её на экране — хуже.
+        """
+        path = self._notification.open_path
+        if not path:
+            self.dismiss()
+            return
+
+        result = open_file_with_fallback(path)
+        if not result.success:
+            show_error(
+                self.master,
+                "Не удалось открыть файл",
+                result.error,
+            )
+
+        self.dismiss()
 
     # --- Анимация ---
 
@@ -209,7 +346,6 @@ class ToastWindow(ctk.CTkToplevel):
         )
 
     def dismiss(self) -> None:
-        """Плавно закрывает уведомление."""
         if self._closing:
             return
         self._closing = True
@@ -236,7 +372,6 @@ class ToastWindow(ctk.CTkToplevel):
         duration_ms: int,
         on_done,
     ) -> None:
-        """Линейное изменение прозрачности за `duration_ms`."""
         steps = max(1, int(duration_ms / NOTIFY_FADE_STEP_MS))
         step_delta = (end - start) / steps
         value = start
@@ -281,7 +416,7 @@ class ToastWindow(ctk.CTkToplevel):
 
 
 class ToastManager:
-    """Показывает уведомления стопкой и следит за жизненным циклом."""
+    """Показывает уведомления стопкой, следит за лимитом и порядком."""
 
     def __init__(self, master: Any):
         self._master = master
@@ -293,7 +428,6 @@ class ToastManager:
             window = ToastWindow(
                 self._master,
                 notification,
-                offset_index=len(self._active),
                 on_closed=self._on_closed,
             )
         except Exception as exc:
@@ -303,24 +437,44 @@ class ToastManager:
             )
             return False
 
-        self._active.append(window)
-        return True
+        while len(self._active) >= _MAX_ACTIVE_TOASTS:
+            oldest = self._active.pop(0)
+            try:
+                oldest.dismiss()
+            except Exception as exc:
+                logger.debug(
+                    "ToastManager: dismiss старого: %r", exc,
+                )
 
-    def _on_closed(self, window: ToastWindow) -> None:
-        if window in self._active:
-            self._active.remove(window)
+        self._active.append(window)
+        self._restack()
+        window.present()
+        return True
 
     def close_all(self) -> None:
         for window in list(self._active):
             window.dismiss()
 
+    # --- Внутреннее ---
+
+    def _restack(self) -> None:
+        """Пересчитывает позиции стопки снизу вверх."""
+        offset_phys = 0
+        for window in self._active:
+            window.set_bottom_offset_physical(offset_phys)
+            gap_phys = int(
+                round(_STACK_GAP * window.scaling)
+            )
+            offset_phys += window.height_physical + gap_phys
+
+    def _on_closed(self, window: ToastWindow) -> None:
+        if window in self._active:
+            self._active.remove(window)
+            self._restack()
+
 
 class ToastNotifier:
-    """Адаптер `ToastManager` под протокол `Notifier`.
-
-    Вызывается из фонового потока мониторинга, поэтому показ
-    маршалится в главный поток через `after(0, …)`.
-    """
+    """Адаптер `ToastManager` под протокол `Notifier`."""
 
     def __init__(self, manager: ToastManager, window):
         self._manager = manager

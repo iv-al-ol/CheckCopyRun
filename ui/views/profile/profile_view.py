@@ -1,21 +1,25 @@
 """Экран профиля: связывает шапку, форму и действия.
 
 Нижняя зона:
-  • Метка текущей версии файлов (над первым разделителем,
-    полужирный шрифт того же размера/цвета, что и раньше).
+  • Метка текущей версии файлов (в шапке, справа от подписи).
     Расчёт метки выполняется в фоновом потоке — для папок с
     большим числом файлов UI не блокируется. Пока идёт расчёт,
     показывается placeholder «Определение версии…». Защита от
     гонок: счётчик _label_gen — если пользователь переключился
     на другой профиль, устаревший результат отбрасывается.
   • Ряд действий: Копировать / Запустить приложение / Резервные
-    копии.
+    копии. Ширина кнопок — `PROFILE_FORM_BUTTON_WIDTH`.
   • Ряд служебных: Сменить иконку / Переименовать / Сбросить
-    настройки / Удалить.
+    настройки / Удалить. Ширина — та же, пока окно растянуто
+    достаточно. При сжатии уменьшаются (минимум — 100).
+  • Кнопки формы — всегда фиксированной ширины.
 
+Кнопка «Создать message.txt» в форме профиля: создаёт
+`!CCRun/message.txt` в папке-источнике с шаблоном-инструкцией.
+
+Уведомления по профилю по умолчанию выключены.
 Предупреждение при снятии флажка «Создавать резервные копии»
-показывается один раз — за всё время жизни профиля. Флаг
-profile.create_backup_warned сохраняется в settings.dat.
+показывается один раз — за всё время жизни профиля.
 """
 
 from __future__ import annotations
@@ -30,14 +34,17 @@ from config.constants import (
     PROFILE_ACTION_BAR_PADY_BOTTOM,
     PROFILE_ACTION_BAR_PADY_TOP,
     PROFILE_ACTION_BUTTON_HEIGHT,
+    PROFILE_FORM_BUTTON_WIDTH,
     PROFILE_UTILITY_BAR_PADY_BOTTOM,
     PROFILE_UTILITY_BAR_PADY_TOP,
     PROFILE_UTILITY_BUTTON_HEIGHT,
+    PROFILE_UTILITY_BUTTON_MIN_WIDTH,
     SEPARATOR_PADY,
 )
 from core.models import Profile
 from core.settings_store import save_settings
 from services.cas import destination_state
+from services.monitor.message_file import ensure_message_template
 from services.restore.restore_service import RestoreResult
 from ui.components.button import (
     VARIANT_PRIMARY,
@@ -58,6 +65,7 @@ from ui.views.profile.profile_path_controller import (
 from ui.views.profile.profile_paths import (
     path_conflict_error,
     profile_subtitle,
+    source_error,
 )
 from ui.views.profile.profile_process_controller import (
     ProfileProcessController,
@@ -66,13 +74,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_UTILITY_BUTTON_WIDTH = 160
 _BUTTON_GAP = 8
-
-_BUTTON_FONT_SIZE = 13
-_BUTTON_PADDING = 36
-_BUTTON_MIN_WIDTH = 100
-_BUTTON_MAX_WIDTH = 280
 
 _VERSION_FONT_SIZE = 12
 _VERSION_PLACEHOLDER = "Определение версии…"
@@ -89,18 +91,6 @@ _UTILITY_LABELS: tuple[str, ...] = (
 )
 
 
-def _button_width_for(text: str) -> int:
-    """Ширина кнопки под текст + отступы."""
-    try:
-        font = get_font(_BUTTON_FONT_SIZE)
-        measured = int(font.measure(text))
-    except Exception as exc:
-        logger.debug("font.measure недоступен: %r", exc)
-        measured = len(text) * 9
-    width = measured + _BUTTON_PADDING
-    return max(_BUTTON_MIN_WIDTH, min(_BUTTON_MAX_WIDTH, width))
-
-
 class ProfileView(BaseView):
     """Форма профиля. Один экземпляр, переключается через set_profile."""
 
@@ -113,19 +103,7 @@ class ProfileView(BaseView):
         self._busy = False
         self._label_gen: int = 0
 
-        self._ideal_button_width = max(
-            _button_width_for(_ACTION_LABEL_COPY),
-            _button_width_for(_ACTION_LABEL_RUN),
-            _button_width_for(_ACTION_LABEL_BACKUPS),
-        )
-        self._current_button_width = self._ideal_button_width
-
-        self._ideal_utility_width = max(
-            _UTILITY_BUTTON_WIDTH,
-            *(_button_width_for(t) for t in _UTILITY_LABELS),
-        )
-        self._current_utility_width = self._ideal_utility_width
-
+        self._current_utility_width = PROFILE_FORM_BUTTON_WIDTH
         self._utility_buttons: list[StyledButton] = []
 
         self._path_controller = ProfilePathController(
@@ -167,9 +145,11 @@ class ProfileView(BaseView):
             on_backup_toggle=self._on_backup_toggle,
             on_run_after_toggle=self._on_run_after_toggle,
             on_check_on_startup_toggle=self._on_check_on_startup_toggle,
+            on_check_periodically_toggle=self._on_check_periodically_toggle,
             on_mirror_toggle=self._on_mirror_toggle,
             on_notify_changes_toggle=self._on_notify_changes_toggle,
             on_notify_message_toggle=self._on_notify_message_toggle,
+            on_create_message_file=self._on_create_message_file,
         )
         self._form.grid(
             row=1, column=0, sticky="ew",
@@ -194,12 +174,6 @@ class ProfileView(BaseView):
     # --- Метка версии ---
 
     def _build_version_label(self) -> None:
-        """Метка версии живёт в шапке, справа от подписи профиля.
-
-        Отдельной строки не занимает: пока источник и целевая
-        папка не заданы, подпись говорит об этом словами, а
-        метка просто пустая. Это экономит высоту окна.
-        """
         self._version_label = ctk.CTkLabel(
             self._header,
             text="",
@@ -213,12 +187,6 @@ class ProfileView(BaseView):
     def _update_version_label(
         self, profile: Profile | None,
     ) -> None:
-        """Запускает расчёт метки версии в фоновом потоке.
-
-        Немедленно: обнуляет счётчик поколений и показывает
-        placeholder. По завершении фона — обновляет текст, если
-        поколение не изменилось.
-        """
         self._label_gen += 1
         gen = self._label_gen
 
@@ -228,8 +196,6 @@ class ProfileView(BaseView):
 
         dest = profile.destination
 
-        # Placeholder — чтобы не показывать устаревшую метку
-        # от предыдущего профиля и не пустоту.
         try:
             self._version_label.configure(
                 text=_VERSION_PLACEHOLDER,
@@ -264,13 +230,6 @@ class ProfileView(BaseView):
         ).start()
 
     def _apply_label(self, gen: int, text: str) -> None:
-        """Применяет результат из фонового потока.
-
-        Результат отбрасывается, если:
-          • за это время было запущено новое поколение
-            (_label_gen изменился);
-          • виджет уже уничтожен.
-        """
         if gen != self._label_gen:
             return
         try:
@@ -295,12 +254,6 @@ class ProfileView(BaseView):
     # --- Разделители ---
 
     def _build_top_separator(self) -> None:
-        """Разделитель над рядом действий.
-
-        Зазор до кнопок даёт сам ряд (`PROFILE_ACTION_BAR_PADY_TOP`),
-        поэтому у разделителя отступ нулевой — иначе он складывался
-        бы из двух источников и выглядел неравномерным.
-        """
         sep = make_separator(self)
         sep.grid(
             row=1, column=0, sticky="ew",
@@ -308,11 +261,6 @@ class ProfileView(BaseView):
         )
 
     def _build_bottom_separator(self) -> None:
-        """Разделитель между рядом действий и служебным рядом.
-
-        Отступы сверху и снизу задают сами ряды, поэтому здесь
-        тоже `SEPARATOR_PADY` (0).
-        """
         sep = make_separator(self)
         sep.grid(
             row=3, column=0, sticky="ew",
@@ -338,7 +286,7 @@ class ProfileView(BaseView):
         bar.grid_columnconfigure(3, weight=0)
 
         self._action_bar = bar
-        w = self._ideal_button_width
+        w = PROFILE_FORM_BUTTON_WIDTH
 
         self._copy_btn = StyledButton(
             bar, text=_ACTION_LABEL_COPY,
@@ -369,45 +317,6 @@ class ProfileView(BaseView):
         )
         self._backups_btn.grid(row=0, column=3)
 
-        bar.bind(
-            "<Configure>", self._on_action_bar_configure, add="+",
-        )
-
-    def _on_action_bar_configure(self, event) -> None:
-        try:
-            bar_w = int(event.width)
-        except Exception as exc:
-            logger.debug("event.width: %r", exc)
-            return
-
-        if bar_w <= 1:
-            return
-
-        min_w = _BUTTON_MIN_WIDTH
-        ideal = self._ideal_button_width
-        gap = _BUTTON_GAP
-        needed_ideal = ideal * 3 + 2 * gap
-
-        if bar_w >= needed_ideal:
-            new_w = ideal
-        else:
-            available = bar_w - 2 * gap
-            if available < min_w * 3:
-                new_w = min_w
-            else:
-                new_w = available // 3
-
-        if new_w == self._current_button_width:
-            return
-
-        self._current_button_width = new_w
-
-        for btn in (self._copy_btn, self._run_btn, self._backups_btn):
-            try:
-                btn.configure(width=new_w)
-            except Exception as exc:
-                logger.debug("configure(width) кнопки: %r", exc)
-
     # --- Ряд служебных кнопок ---
 
     def _build_utility_bar(self) -> None:
@@ -422,7 +331,7 @@ class ProfileView(BaseView):
         )
 
         self._utility_bar = bar
-        w = self._ideal_utility_width
+        w = PROFILE_FORM_BUTTON_WIDTH
 
         commands = (
             self._on_change_icon,
@@ -468,12 +377,11 @@ class ProfileView(BaseView):
         if count == 0:
             return
 
-        min_w = _BUTTON_MIN_WIDTH
-        ideal = self._ideal_utility_width
+        ideal = PROFILE_FORM_BUTTON_WIDTH
+        min_w = PROFILE_UTILITY_BUTTON_MIN_WIDTH
         gap = _BUTTON_GAP
 
         needed_ideal = ideal * count + gap * (count - 1)
-
         if bar_w >= needed_ideal:
             new_w = ideal
         else:
@@ -515,9 +423,10 @@ class ProfileView(BaseView):
                 create_backup=True,
                 run_after_copy=False,
                 check_on_startup=False,
+                check_periodically=False,
                 mirror_mode=False,
-                notify_on_changes=True,
-                notify_on_message=True,
+                notify_on_changes=False,
+                notify_on_message=False,
             )
             self._form.update_open_buttons(
                 source_enabled=False,
@@ -539,6 +448,7 @@ class ProfileView(BaseView):
             create_backup=profile.create_backup,
             run_after_copy=profile.run_after_copy,
             check_on_startup=profile.check_on_startup,
+            check_periodically=profile.check_periodically,
             mirror_mode=profile.mirror_mode,
             notify_on_changes=profile.notify_on_changes,
             notify_on_message=profile.notify_on_message,
@@ -687,6 +597,35 @@ class ProfileView(BaseView):
             ),
         )
 
+    # --- Создание message.txt ---
+
+    def _on_create_message_file(self) -> None:
+        profile = self._profile()
+        if profile is None:
+            return
+
+        src_err = source_error(profile.source)
+        if src_err is not None:
+            show_error(
+                self.window,
+                "Нельзя создать файл",
+                src_err,
+            )
+            return
+
+        ok, err = ensure_message_template(profile.source)
+        if not ok:
+            show_error(
+                self.window,
+                "Не удалось создать message.txt",
+                err,
+            )
+            return
+
+        self.window.set_status(
+            "Создан !CCRun/message.txt — можно писать сообщение",
+        )
+
     # --- Чекбоксы ---
 
     def _on_backup_toggle(self) -> None:
@@ -739,6 +678,20 @@ class ProfileView(BaseView):
         state = "включена" if profile.check_on_startup else "выключена"
         self.window.set_status(
             f"Автопроверка при запуске {state}",
+        )
+
+    def _on_check_periodically_toggle(self) -> None:
+        profile = self._profile()
+        if profile is None:
+            return
+        profile.check_periodically = self._form.check_periodically
+        save_settings(self.window.settings)
+        self.window.refresh_monitor_config()
+        state = (
+            "включена" if profile.check_periodically else "выключена"
+        )
+        self.window.set_status(
+            f"Периодическая проверка директории {state}",
         )
 
     def _on_mirror_toggle(self) -> None:

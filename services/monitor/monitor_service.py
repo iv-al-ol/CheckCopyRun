@@ -13,6 +13,8 @@
      - пропустить, если идёт копирование/восстановление;
      - построить текущий снимок источника (stat-only);
      - сравнить с сохранённым снимком;
+     - если `check_periodically` включён и есть изменения,
+       вызвать колбэк для периодического копирования;
      - прочитать `!CCRun/message.txt`, сравнить sha256;
      - обновить базу **до** показа уведомления (дедупликация);
      - накопить `ProfileDigest`.
@@ -20,6 +22,26 @@
 
 Первый цикл для профиля только создаёт базу — иначе
 уведомление сообщило бы «изменилось всё».
+
+`message.txt` с одними комментариями (строки с `#`) считается
+пустым: `sha256` обновляется, уведомление не показывается.
+Так шаблон, созданный кнопкой «Создать message.txt», не
+выглядит как сообщение, но и не приводит к повторному чтению
+каждый цикл.
+
+Показ уведомлений:
+  • `notify_aggregate=True` — одно уведомление со списком
+    всех профилей с новостями (не больше
+    `NOTIFY_AGGREGATE_MAX_ITEMS` строк внутри).
+  • `notify_aggregate=False` — split-режим: до
+    `NOTIFY_SPLIT_MAX_DETAILED` подробных тостов (последние
+    в порядке обхода), и если профилей с новостями больше —
+    один обобщающий «Проверьте папки источников» с числом
+    скрытых. Всего не больше 4 тостов.
+
+Для одиночного уведомления о сообщении в `ProfileDigest`
+кладётся `message_file_path` — тост показывает кнопку
+«Открыть».
 """
 
 from __future__ import annotations
@@ -33,10 +55,14 @@ from config.constants import (
     MONITOR_INTERVAL_DEFAULT,
     MONITOR_INTERVAL_MAX,
     MONITOR_INTERVAL_MIN,
+    NOTIFY_SPLIT_MAX_DETAILED,
 )
 from core import long_io
 from core.models import AppSettings, Profile
-from services.monitor.message_file import read_message
+from services.monitor.message_file import (
+    message_path,
+    read_message,
+)
 from services.monitor.monitor_state import (
     MonitorEntry,
     MonitorStore,
@@ -50,6 +76,7 @@ from services.system.notifier import (
     Notifier,
     ProfileDigest,
     format_profile_notification,
+    format_split_summary,
 )
 from utils.logger import get_logger
 
@@ -92,6 +119,7 @@ class MonitorService:
         notifier: Notifier,
         store: MonitorStore | None = None,
         is_busy: Callable[[str], bool] | None = None,
+        on_periodic_copy: Callable[[Profile], None] | None = None,
         scheduler: Callable[[Callable[[], None]], None] | None = None,
     ) -> None:
         """
@@ -100,12 +128,16 @@ class MonitorService:
             store: База снимков (по умолчанию — Documents).
             is_busy: `True`, если по профилю сейчас идёт
                 копирование/восстановление.
+            on_periodic_copy: Колбэк для запуска копирования,
+                если у профиля включён `check_periodically` и
+                есть изменения.
             scheduler: Маршалинг в UI-поток (необязателен:
                 уведомления показываются прямо из потока).
         """
         self._notifier = notifier
         self._store = store or MonitorStore()
         self._is_busy = is_busy or (lambda _pid: False)
+        self._on_periodic_copy = on_periodic_copy or (lambda _p: None)
         self._schedule = scheduler
 
         self._lock = threading.Lock()
@@ -286,6 +318,8 @@ class MonitorService:
         """
         if not profile.source:
             return False
+        if profile.check_periodically:
+            return True
         if settings.notify_source_changes and profile.notify_on_changes:
             return True
         if settings.notify_message and profile.notify_on_message:
@@ -314,7 +348,12 @@ class MonitorService:
         digest = ProfileDigest(profile_name=profile.display_name)
         changed = False
 
-        if settings.notify_source_changes and profile.notify_on_changes:
+        need_diff = (
+            (settings.notify_source_changes and profile.notify_on_changes)
+            or profile.check_periodically
+        )
+
+        if need_diff:
             current = build_snapshot(profile.source)
             if current is None:
                 result.skipped_unavailable += 1
@@ -332,15 +371,29 @@ class MonitorService:
                 and loaded.source == profile.source
                 else None
             )
+
+            has_changes = False
             if previous is not None:
                 diff = diff_snapshots(previous, current)
                 if diff.has_changes:
-                    digest.added = diff.added
-                    digest.modified = diff.modified
-                    digest.removed = diff.removed
-                    changed = True
+                    has_changes = True
+                    if (
+                        settings.notify_source_changes
+                        and profile.notify_on_changes
+                    ):
+                        digest.added = diff.added
+                        digest.modified = diff.modified
+                        digest.removed = diff.removed
+                        changed = True
 
             entry.snapshot = current
+
+            if profile.check_periodically and has_changes:
+                logger.info(
+                    "Мониторинг %s: периодическое копирование",
+                    profile.display_name,
+                )
+                self._on_periodic_copy(profile)
 
         if settings.notify_message and profile.notify_on_message:
             message = read_message(profile.source)
@@ -348,9 +401,13 @@ class MonitorService:
                 message.sha256
                 and message.sha256 != entry.message_sha256
             ):
-                digest.message_preview = message.preview
-                digest.message_truncated = message.truncated
-                changed = True
+                if message.preview:
+                    digest.message_preview = message.preview
+                    digest.message_truncated = message.truncated
+                    digest.message_file_path = message_path(
+                        profile.source,
+                    )
+                    changed = True
             entry.message_sha256 = message.sha256
 
         self._store.save(entry)
@@ -388,7 +445,7 @@ class MonitorService:
         settings: AppSettings,
         result: MonitorRunResult,
     ) -> None:
-        """Показ уведомлений: агрегированно или по одному."""
+        """Показ уведомлений: агрегированно или раздельно."""
         if settings.notify_aggregate:
             notification = format_profile_notification(
                 digests, aggregate=True,
@@ -402,8 +459,12 @@ class MonitorService:
             result.notifications = 1
             return
 
+        limit = NOTIFY_SPLIT_MAX_DETAILED
+        detailed = digests[-limit:] if len(digests) > limit else digests
+        skipped = len(digests) - len(detailed)
+
         shown = 0
-        for digest in digests:
+        for digest in detailed:
             notification = format_profile_notification(
                 [digest], aggregate=False,
             )
@@ -414,6 +475,15 @@ class MonitorService:
             )
             self._show(notification)
             shown += 1
+
+        if skipped > 0:
+            summary = format_split_summary(skipped)
+            summary.auto_close_sec = (
+                settings.notify_auto_close_sec
+            )
+            self._show(summary)
+            shown += 1
+
         result.notifications = shown
 
     def _show(self, notification: Notification) -> None:

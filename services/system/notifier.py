@@ -13,6 +13,27 @@
 Показ идёт из фонового потока мониторинга, поэтому все
 провайдеры обязаны быть потокобезопасными. Форматирование
 вынесено в чистые функции — их легко тестировать без Tk.
+
+Заголовки уведомлений начинаются с `APP_NAME`, чтобы
+пользователь сразу видел, откуда пришло уведомление.
+
+Для одиночного уведомления об изменениях текст идёт списком
+(без суммирования файлов):
+    Добавлено: 2
+    Изменено: 1
+    Удалено: 3
+Нулевые категории опускаются.
+
+В заголовке агрегированного уведомления нет числа и падежа —
+только «Обновления в профилях», а список профилей уходит в
+тело. Это избавляет от ошибок склонения («в 2 профиля»).
+
+`Notification.open_path` — необязательный путь к файлу, который
+можно открыть из уведомления (кнопка «Открыть» в тосте). Для
+одиночного уведомления о сообщении источника это путь к
+`!CCRun/message.txt`. Для агрегата и split-summary путь пустой:
+некуда вести пользователя из одного уведомления про несколько
+профилей.
 """
 
 from __future__ import annotations
@@ -21,7 +42,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from config.constants import NOTIFY_AGGREGATE_MAX_ITEMS
+from config.constants import (
+    APP_NAME,
+    NOTIFY_AGGREGATE_MAX_ITEMS,
+)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -36,6 +60,7 @@ __all__ = [
     "build_fallback_notifier",
     "format_changes_summary",
     "format_profile_notification",
+    "format_split_summary",
     "plural_files",
     "plural_profiles",
 ]
@@ -50,6 +75,11 @@ class Notification:
 
     # Секунды до автоскрытия; 0 — не скрывать автоматически.
     auto_close_sec: int = 0
+
+    # Путь к файлу для кнопки «Открыть». Пустая строка — кнопки
+    # нет. Заполняется только там, где это имеет смысл (одно
+    # уведомление, известен конкретный файл).
+    open_path: str = ""
 
 
 class Notifier(Protocol):
@@ -141,9 +171,12 @@ def plural_profiles(n: int) -> str:
 def format_changes_summary(
     added: int, modified: int, removed: int,
 ) -> str:
-    """Сводка изменений: «добавлено 2, изменено 1, удалено 3 файла».
+    """Сводка изменений одной строкой: «добавлено 2, изменено 1, удалено 3».
 
     Нулевые компоненты опускаются, чтобы текст не шумел.
+    Без суммирования в конце: число в каждой категории и так
+    даёт полную картину, а общий итог дублирует его и выглядит
+    избыточно («Удалено 2 — 2 файла»).
     """
     parts: list[str] = []
     if added:
@@ -152,14 +185,7 @@ def format_changes_summary(
         parts.append(f"изменено {modified}")
     if removed:
         parts.append(f"удалено {removed}")
-    if not parts:
-        return ""
-
-    total = added + modified + removed
-    return (
-        f"{', '.join(parts)} — "
-        f"{total} {plural_files(total)}"
-    )
+    return ", ".join(parts)
 
 
 @dataclass
@@ -172,6 +198,13 @@ class ProfileDigest:
     removed: int = 0
     message_preview: str = ""
     message_truncated: bool = False
+
+    # Путь к `!CCRun/message.txt` этого профиля. Используется
+    # для кнопки «Открыть» в тосте одиночного уведомления.
+    # Пустая строка — уведомление не про сообщение (или путь
+    # неизвестен).
+    message_file_path: str = ""
+
     details: list[str] = field(default_factory=list)
 
     @property
@@ -218,12 +251,14 @@ def _single_notification(digest: ProfileDigest) -> Notification:
     body_parts: list[str] = []
 
     if digest.has_changes:
-        summary = format_changes_summary(
-            digest.added, digest.modified, digest.removed,
-        )
-        body_parts.append(
-            summary.capitalize() + " в папке-источнике."
-        )
+        lines: list[str] = []
+        if digest.added:
+            lines.append(f"Добавлено: {digest.added}")
+        if digest.modified:
+            lines.append(f"Изменено: {digest.modified}")
+        if digest.removed:
+            lines.append(f"Удалено: {digest.removed}")
+        body_parts.append("\n".join(lines))
 
     if digest.has_message:
         message = digest.message_preview
@@ -232,9 +267,17 @@ def _single_notification(digest: ProfileDigest) -> Notification:
         body_parts.append(f"Сообщение: {message}")
 
     body = "\n".join(body_parts) or "Есть обновления."
+
+    # Кнопка «Открыть» — только если уведомление содержит
+    # сообщение и путь к файлу известен. Иначе открывать нечего.
+    open_path = ""
+    if digest.has_message and digest.message_file_path:
+        open_path = digest.message_file_path
+
     return Notification(
-        title=digest.profile_name,
+        title=f"{APP_NAME}: {digest.profile_name}",
         body=body,
+        open_path=open_path,
     )
 
 
@@ -252,12 +295,35 @@ def _aggregated_notification(
             f"…и ещё {hidden} {plural_profiles(hidden)}",
         )
 
+    # Кнопки «Открыть» нет: уведомление про несколько
+    # профилей, вести пользователя к одному файлу нельзя.
     return Notification(
-        title=(
-            f"Обновления в {len(items)} "
-            f"{plural_profiles(len(items))}"
-        ),
+        title=f"{APP_NAME}: Обновления в профилях",
         body="\n".join(lines),
+    )
+
+
+def format_split_summary(extra_count: int) -> Notification:
+    """Обобщённое уведомление для split-режима (4-й тост).
+
+    Показывается, когда подробных тостов уже
+    `NOTIFY_SPLIT_MAX_DETAILED`, а профилей с новостями больше.
+    Пользователь видит «есть ещё обновления, проверьте папки
+    источников» — без деталей и без риска, что новые тосты
+    не поместятся в лимит.
+    """
+    title = f"{APP_NAME}: Есть обновления"
+    if extra_count <= 0:
+        return Notification(
+            title=title,
+            body="Проверьте папки источников.",
+        )
+    return Notification(
+        title=title,
+        body=(
+            f"Ещё в {extra_count} {plural_profiles(extra_count)} "
+            f"есть обновления. Проверьте папки источников."
+        ),
     )
 
 

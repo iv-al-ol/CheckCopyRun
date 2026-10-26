@@ -1,9 +1,14 @@
-"""Вкладка «Уведомления»: каналы, автозакрытие, интервал опроса.
+"""Вкладка «Уведомления»: каналы, автозакрытие.
 
 Мастер-чекбокс «Включить уведомления» стоит отдельно, над
 рамкой: он управляет группой, но сам в неё не входит.
 Все зависимые параметры собраны в **одну** рамку с тонкой
 границей (`SURFACE_BORDER`), у каждого — короткое пояснение.
+
+Строки с полем ввода (автозакрытие) — отдельные
+горизонтальные фреймы внутри рамки: поле прижато к тексту
+своего параметра, а не выравнивается по соседям через grid.
+Примечание под параметром растягивается на всю ширину.
 
 При снятии мастер-галочки всё содержимое рамки блокируется,
 а подписи гаснут по цвету.
@@ -14,8 +19,6 @@ from __future__ import annotations
 import customtkinter as ctk
 
 from config.constants import (
-    MONITOR_INTERVAL_MAX,
-    MONITOR_INTERVAL_MIN,
     NOTIFY_AUTO_CLOSE_MAX,
     NOTIFY_AUTO_CLOSE_MIN,
 )
@@ -36,11 +39,6 @@ _SECTION_PADY_TOP = 8
 # отступом примечаний (`HintLabel`), чтобы текст начинался под
 # чекбоксом.
 _ITEM_PADX = 4
-
-# Подпись + поле + единица занимают три колонки, четвёртая —
-# пустая и растягиваемая. Примечание растягивается на все.
-_COLUMNS = 3
-_SPACER_COLUMN = 3
 
 _GROUP_BORDER_WIDTH = 1
 _GROUP_PADX = 14
@@ -110,14 +108,9 @@ class NotificationsTab(SettingsTab):
             row=0, column=0, sticky="ew",
             padx=_GROUP_PADX, pady=_GROUP_PADY_V,
         )
-        # Растягивается пустая колонка справа, а не первая:
-        # иначе подпись и поле разъезжаются по краям строки.
-        inner.grid_columnconfigure(_SPACER_COLUMN, weight=1)
+        inner.grid_columnconfigure(0, weight=1)
         self._inner = inner
 
-        # Ритм отступов тот же, что в «Общих» и «Бэкапах»: зазор
-        # задаёт верхний отступ (`HintLabel.item_pady()`), а
-        # примечание прижимается к своему параметру сверху.
         row = 0
 
         # --- Каналы ---
@@ -178,23 +171,19 @@ class NotificationsTab(SettingsTab):
         )
         row += 1
 
-        # --- Автозакрытие ---
-        # Подпись, поле и единица размещаются прямо в сетке:
-        # промежуточный фрейм добавлял высоту, и зазор до
-        # примечания отличался от других вкладок.
-        self._add_label(
-            inner, "Скрывать через",
-        ).grid(
+        # --- Автозакрытие: одна горизонтальная строка ---
+        auto_row = ctk.CTkFrame(inner, fg_color="transparent")
+        auto_row.grid(
             row=row, column=0, sticky="w",
             padx=_ITEM_PADX, pady=HintLabel.item_pady(),
         )
 
+        self._add_label(auto_row, "Скрывать через").pack(side="left")
+
         self._auto_close_entry = ctk.CTkEntry(
-            inner, width=_ENTRY_WIDTH,
+            auto_row, width=_ENTRY_WIDTH,
         )
-        self._auto_close_entry.grid(
-            row=row, column=1, sticky="w", padx=(8, 6),
-        )
+        self._auto_close_entry.pack(side="left", padx=(8, 6))
         self._auto_close_entry.bind(
             "<Return>", self._on_auto_close_commit,
         )
@@ -202,9 +191,7 @@ class NotificationsTab(SettingsTab):
             "<FocusOut>", self._on_auto_close_commit,
         )
 
-        self._add_label(
-            inner, "сек.",
-        ).grid(row=row, column=2, sticky="w")
+        self._add_label(auto_row, "сек.").pack(side="left")
         row += 1
 
         self._hint(
@@ -212,49 +199,14 @@ class NotificationsTab(SettingsTab):
             f"0 — уведомление остаётся до клика по нему. "
             f"Максимум — {NOTIFY_AUTO_CLOSE_MAX} секунд.",
         )
-        row += 1
-
-        # --- Частота опроса ---
-        self._add_label(
-            inner, "Проверять каждые",
-        ).grid(
-            row=row, column=0, sticky="w",
-            padx=_ITEM_PADX, pady=HintLabel.item_pady(),
-        )
-
-        self._interval_entry = ctk.CTkEntry(
-            inner, width=_ENTRY_WIDTH,
-        )
-        self._interval_entry.grid(
-            row=row, column=1, sticky="w", padx=(8, 6),
-        )
-        self._interval_entry.bind(
-            "<Return>", self._on_interval_commit,
-        )
-        self._interval_entry.bind(
-            "<FocusOut>", self._on_interval_commit,
-        )
-
-        self._add_label(
-            inner, "мин.",
-        ).grid(row=row, column=2, sticky="w")
-        row += 1
-
-        self._hint(
-            row,
-            f"От {MONITOR_INTERVAL_MIN} до {MONITOR_INTERVAL_MAX} мин. "
-            "Чем меньше интервал, тем чаще опрос источника.",
-        )
 
     def _hint(self, row: int, text: str) -> None:
-        """Примечание под параметром в предыдущей строке сетки."""
+        """Примечание под параметром, во всю ширину колонки."""
         hint = HintLabel(self._inner, text=text)
-        hint.place_in_grid(row=row, columnspan=_SPACER_COLUMN + 1)
+        hint.place_in_grid(row=row)
         self._group_hints.append(hint)
 
-    def _add_label(
-        self, master, text: str,
-    ) -> ctk.CTkLabel:
+    def _add_label(self, master, text: str) -> ctk.CTkLabel:
         """Подпись параметра, гаснущая вместе с блокировкой."""
         label = ctk.CTkLabel(
             master, text=text, anchor="w",
@@ -276,12 +228,12 @@ class NotificationsTab(SettingsTab):
         self._changes_var.set(bool(s.notify_source_changes))
         self._message_var.set(bool(s.notify_message))
         self._aggregate_var.set(bool(s.notify_aggregate))
+
         self._auto_close_entry.delete(0, "end")
         self._auto_close_entry.insert(
             0, str(s.notify_auto_close_sec),
         )
-        self._interval_entry.delete(0, "end")
-        self._interval_entry.insert(0, str(s.monitor_interval_min))
+
         self._apply_enabled_state()
 
     def on_show(self) -> None:
@@ -295,7 +247,6 @@ class NotificationsTab(SettingsTab):
             widget.configure(state=state)
 
         self._auto_close_entry.configure(state=state)
-        self._interval_entry.configure(state=state)
 
         label_color = (
             _ENABLED_TEXT_COLOR if enabled
@@ -373,30 +324,3 @@ class NotificationsTab(SettingsTab):
         value = self.window.settings.notify_auto_close_sec
         self._auto_close_entry.delete(0, "end")
         self._auto_close_entry.insert(0, str(value))
-
-    def _on_interval_commit(self, _event=None) -> None:
-        raw = self._interval_entry.get().strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            self._restore_interval()
-            self.window.set_status(
-                "Интервал проверки: нужно целое число минут",
-            )
-            return
-
-        clamped = max(
-            MONITOR_INTERVAL_MIN,
-            min(MONITOR_INTERVAL_MAX, value),
-        )
-        self.window.settings.monitor_interval_min = clamped
-        self._restore_interval()
-        self.window.save_settings_now()
-        self.window.set_status(
-            f"Источник будет проверяться каждые {clamped} мин",
-        )
-
-    def _restore_interval(self) -> None:
-        value = self.window.settings.monitor_interval_min
-        self._interval_entry.delete(0, "end")
-        self._interval_entry.insert(0, str(value))

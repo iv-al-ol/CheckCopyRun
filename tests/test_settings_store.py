@@ -35,6 +35,18 @@ def test_notifications_defaults():
     assert s.monitor_interval_min == MONITOR_INTERVAL_DEFAULT
 
 
+def test_profile_notifications_default_off():
+    """Уведомления по профилю по умолчанию выключены.
+
+    Пользователь сам решает, следить ли за источником: профиль
+    с папкой на файловом сервере не должен молча опрашивать
+    чужой ресурс.
+    """
+    p = Profile()
+    assert p.notify_on_changes is False
+    assert p.notify_on_message is False
+
+
 def test_notifications_roundtrip():
     s = AppSettings(
         notifications_enabled=False,
@@ -170,3 +182,28 @@ def test_from_dict_missing_new_fields_uses_defaults():
     assert s.autostart is False
     assert s.start_minimized is False
     assert s.run_autocheck_on_restored is False
+
+
+def test_backup_keep_last_default_true():
+    """«Хранить последние N» включено по умолчанию: без этого
+    CAS-хранилище растёт бесконтрольно.
+    """
+    # 1. Дефолт модели.
+    s = AppSettings()
+    assert s.backup_keep_last_enabled is True
+    assert s.backup_keep_last_n == 10
+
+    # 2. Старый settings.dat без поля — получает новый дефолт,
+    #    а не захардкоженный False в загрузчике.
+    legacy = {"version": 1, "profiles": []}
+    s2 = _from_dict(legacy)
+    assert s2.backup_keep_last_enabled is True
+
+    # 3. Явное False уважается (пользователь отключил вручную).
+    s3 = _from_dict({"backup_keep_last_enabled": False})
+    assert s3.backup_keep_last_enabled is False
+
+    # 4. Roundtrip сохраняет выбор пользователя.
+    s4 = AppSettings(backup_keep_last_enabled=False)
+    s5 = _from_dict(_to_dict(s4))
+    assert s5.backup_keep_last_enabled is False

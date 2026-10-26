@@ -43,6 +43,7 @@ _PROFILE_FIELDS = {
     "create_backup_warned",
     "run_after_copy",
     "check_on_startup",
+    "check_periodically",
     "mirror_mode",
     "notify_on_changes",
     "notify_on_message",
@@ -217,8 +218,9 @@ def _from_dict(data: dict) -> AppSettings:
                 ),
             ),
         ),
+        # Дефолт True — новый дефолт модели.
         backup_keep_last_enabled=bool(
-            data.get("backup_keep_last_enabled", False)
+            data.get("backup_keep_last_enabled", True)
         ),
         backup_keep_last_n=_int(
             data.get("backup_keep_last_n", 10), 10,
