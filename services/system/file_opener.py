@@ -42,7 +42,11 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ["OpenFileResult", "open_file_with_fallback"]
+__all__ = [
+    "OpenFileResult",
+    "open_file_with_fallback",
+    "try_open_associated",
+]
 
 
 # Способ, которым файл удалось открыть.
@@ -59,6 +63,52 @@ class OpenFileResult:
     success: bool
     method: str = METHOD_NONE
     error: str = ""
+
+
+def try_open_associated(path: str) -> OpenFileResult:
+    """Открывает файл только программой по умолчанию.
+
+    В отличие от `open_file_with_fallback`, ничего не подменяет:
+    если для расширения нет ассоциации или она битая — простой
+    отказ. Нужно там, где у вызывающей стороны есть свой
+    запасной вариант (например, встроенный просмотр).
+    """
+    if not path:
+        return OpenFileResult(
+            success=False,
+            error="Путь к файлу не задан",
+        )
+
+    if not long_io.isfile(to_long_path(path)):
+        return OpenFileResult(
+            success=False,
+            error=f"Файл не найден:\n{path}",
+        )
+
+    display = display_path(path)
+
+    startfile = getattr(os, "startfile", None)
+    if startfile is None:
+        return OpenFileResult(
+            success=False,
+            error="Ассоциации файлов недоступны в этой системе",
+        )
+
+    try:
+        startfile(display)
+    except OSError as exc:
+        logger.info(
+            "Нет ассоциации для %r: %r", display, exc,
+        )
+        return OpenFileResult(
+            success=False,
+            error=(
+                "Не нашлось программы, связанной с этим "
+                f"типом файлов.\n\nПуть:\n{path}"
+            ),
+        )
+
+    return OpenFileResult(success=True, method=METHOD_ASSOC)
 
 
 def open_file_with_fallback(path: str) -> OpenFileResult:
@@ -86,7 +136,7 @@ def open_file_with_fallback(path: str) -> OpenFileResult:
 
     # 1. Ассоциация пользователя: Блокнот, Notepad++, что угодно.
     try:
-        os.startfile(display)  # type: ignore[attr-defined]
+        os.startfile(display)  # noqa: S606  # type: ignore[attr-defined]
         return OpenFileResult(
             success=True, method=METHOD_ASSOC,
         )
@@ -99,8 +149,10 @@ def open_file_with_fallback(path: str) -> OpenFileResult:
 
     # 2. Блокнот — есть на любой Windows.
     try:
-        subprocess.Popen(
-            ["notepad.exe", display], close_fds=True,
+        # notepad.exe — системная утилита Windows, аргумент один.
+        subprocess.Popen(  # noqa: S603
+            ["notepad.exe", display],  # noqa: S607
+            close_fds=True,
         )
         return OpenFileResult(
             success=True, method=METHOD_NOTEPAD,
@@ -112,8 +164,9 @@ def open_file_with_fallback(path: str) -> OpenFileResult:
 
     # 3. Проводник с выделением файла.
     try:
-        subprocess.Popen(
-            ["explorer", f"/select,{display}"],
+        # explorer — системная утилита Windows, аргумент один.
+        subprocess.Popen(  # noqa: S603
+            ["explorer", f"/select,{display}"],  # noqa: S607
             close_fds=True,
         )
         return OpenFileResult(

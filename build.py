@@ -1,9 +1,9 @@
 """Сборка CheckCopyRun через Nuitka.
 
-Имя .exe и папки сборки — CCRun (сокращение от CheckCopyRun).
+Имя .exe — CCRun, имя папки сборки — CheckCopyRun.
 
 Запуск:
-    uv run build.py                 # папочная сборка (CCRun.dist/)
+    uv run build.py                 # папочная сборка (CheckCopyRun.dist/)
     uv run build.py --onefile       # единый CCRun.exe
     uv run build.py --debug         # с консолью (для отладки)
 
@@ -12,7 +12,7 @@
   2. Читает APP_NAME / APP_TITLE / APP_VERSION из constants.
   3. Удаляет старые артефакты, чтобы не смешивались.
   4. Запускает Nuitka.
-  5. Переименовывает main.build / main.dist в CCRun.*
+  5. Переименовывает main.build / main.dist в CheckCopyRun.*
   6. Печатает путь к готовому .exe.
 
 Иконка берётся из assets/icon.ico: встраивается в .exe
@@ -30,11 +30,16 @@ from pathlib import Path
 # --- Параметры сборки ---
 
 ENTRY_SCRIPT = "main.py"
-# Имя exe и папки сборки — CCRun (сокращение от CheckCopyRun).
+# Имя .exe — CCRun (сокращение от CheckCopyRun).
 # Метаданные exe (CompanyName / ProductName) берутся из
 # config/constants.py — APP_NAME / APP_TITLE.
 OUTPUT_NAME = "CCRun"
+# Имя папки сборки — CheckCopyRun (полное название).
+OUTPUT_DIR_NAME = "CheckCopyRun"
 ICON_FILE = "assets/icon.ico"
+# Документация: попадает рядом с .exe и открывается из вкладки
+# «Описание» в настройках.
+README_FILE = "README.md"
 # Манифест с dpiAwareness=PerMonitorV2: без него Windows растягивает
 # готовое изображение окна и на 2K/4K интерфейс получается мыльным,
 # а ScalingTracker видит масштаб 1.0 и ломает расчёт геометрии.
@@ -42,10 +47,14 @@ MANIFEST_FILE = "assets/app.manifest"
 ASSETS_DIR = "assets"
 OUTPUT_DIR = "build"
 
+# Прежнее имя папки сборки — чистим, чтобы старые артефакты
+# не путались с новыми.
+_LEGACY_STEM = "CCRun"
+
 # Nuitka создаёт папки по имени главного скрипта: main.build,
-# main.dist, main.onefile-build. Переименовываем в CCRun.*
+# main.dist, main.onefile-build. Переименовываем в CheckCopyRun.*
 _MAIN_STEM = Path(ENTRY_SCRIPT).stem
-_RENAMED_STEM = OUTPUT_NAME
+_RENAMED_STEM = OUTPUT_DIR_NAME
 
 _RENAME_MAP = {
     f"{_MAIN_STEM}.build": f"{_RENAMED_STEM}.build",
@@ -137,6 +146,9 @@ def _build_command(
         f"--file-description={meta['title']}",
         # Данные: assets/ (иконка приложения).
         f"--include-data-dir={ASSETS_DIR}={ASSETS_DIR}",
+        # README.md кладём рядом с .exe — на него ссылается
+        # вкладка «Описание» в настройках.
+        f"--include-data-files={README_FILE}={README_FILE}",
     ]
 
     if onefile:
@@ -185,6 +197,13 @@ def _check_prerequisites(project_root: Path) -> bool:
     if not constants.is_file():
         errors.append(f"Не найден config/constants.py: {constants}")
 
+    readme = project_root / README_FILE
+    if not readme.is_file():
+        errors.append(
+            f"Не найден {README_FILE}: {readme}\n"
+            f"Он открывается из вкладки «Описание».",
+        )
+
     # Nuitka
     try:
         result = subprocess.run(
@@ -227,6 +246,10 @@ def _clean_output(project_root: Path) -> None:
     targets.append(out_dir / f"{_MAIN_STEM}.build")
     targets.append(out_dir / f"{_MAIN_STEM}.dist")
     targets.append(out_dir / f"{_MAIN_STEM}.onefile-build")
+    # Артефакты прежних сборок (папка называлась CCRun).
+    targets.append(out_dir / f"{_LEGACY_STEM}.dist")
+    targets.append(out_dir / f"{_LEGACY_STEM}.build")
+    targets.append(out_dir / f"{_LEGACY_STEM}.onefile-build")
 
     for t in targets:
         if not t.exists():
@@ -242,7 +265,7 @@ def _clean_output(project_root: Path) -> None:
 
 
 def _rename_artifacts(project_root: Path) -> None:
-    """Переименовывает main.* в CCRun.*"""
+    """Переименовывает main.* в CheckCopyRun.*"""
     out_dir = project_root / OUTPUT_DIR
     if not out_dir.exists():
         return

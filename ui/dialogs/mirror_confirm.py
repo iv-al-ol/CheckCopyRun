@@ -84,7 +84,7 @@ def confirm_mirror(
     ).pack(padx=32, pady=(title_top, 8), fill="x")
 
     # --- Цифры ---
-    ratio_pct = int(round(stats.files_ratio * 100))
+    ratio_pct = round(stats.files_ratio * 100)
     summary = (
         f"Больше половины содержимого папки назначения "
         f"отсутствует в источнике: "

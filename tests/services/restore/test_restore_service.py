@@ -375,7 +375,7 @@ def test_restore_point_reuses_when_current_broken(
     r1 = run_copy(src, dst)  # A
 
     (src / "a.txt").write_text("v2")
-    r2 = run_copy(src, dst)  # B (current=B)
+    run_copy(src, dst)  # B (current=B)
 
     # Ломаем current.
     CurrentPointer(str(dst)).save(CurrentData(

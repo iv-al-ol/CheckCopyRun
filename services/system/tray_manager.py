@@ -18,7 +18,7 @@ class TrayManager:
         title: str,
         on_show: Callable[[], None],
         on_quit: Callable[[], None],
-    ):
+    ) -> None:
         self._icon_path = icon_path
         self._title = title
         self._on_show = on_show

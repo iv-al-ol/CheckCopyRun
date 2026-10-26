@@ -150,7 +150,7 @@ class _RestoreWorker(WorkerEventsMixin, threading.Thread):
         on_progress: Callable[[RestoreProgress], None],
         on_done: Callable[[RestoreResult], None],
         on_error: Callable[[str], None],
-    ):
+    ) -> None:
         super().__init__(name="RestoreWorker", daemon=True)
         self._backup_state_ref = backup_state_ref
         self._destination = destination
@@ -266,7 +266,11 @@ class _RestoreWorker(WorkerEventsMixin, threading.Thread):
     # --- Загрузка target ---
 
     def _load_target(self) -> bool:
-        assert self._state_store is not None
+        if self._state_store is None:
+            self._emit_error(
+                "Хранилище состояний не инициализировано"
+            )
+            return False
         try:
             self._target = self._state_store.load(
                 self._backup_state_ref,
@@ -324,8 +328,11 @@ class _RestoreWorker(WorkerEventsMixin, threading.Thread):
            переиспользуем.
         3. Иначе создаём новый restore_point.
         """
-        assert self._state_store is not None
-        assert self._current is not None
+        if self._state_store is None or self._current is None:
+            logger.error(
+                "CAS не инициализирован — restore_point не создан",
+            )
+            return
 
         # 1. current.state
         cur = self._current.load()
@@ -496,7 +503,7 @@ class RestoreService:
     def __init__(
         self,
         scheduler: Callable[[Callable[[], None]], None] | None = None,
-    ):
+    ) -> None:
         self._scheduler = scheduler or (lambda fn: fn())
         self._lock = threading.Lock()
         self._worker: _RestoreWorker | None = None

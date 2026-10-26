@@ -118,7 +118,7 @@ def test_not_exe_raises(monkeypatch, tmp_path):
     bad.write_text("hello")
     calls = _record_popen(monkeypatch)
 
-    with pytest.raises(LaunchError, match="не является .exe"):
+    with pytest.raises(LaunchError, match=r"не является \.exe"):
         launch_exe(str(bad))
 
     assert calls == []

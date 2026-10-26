@@ -14,6 +14,7 @@ from services.system.file_opener import (
     METHOD_EXPLORER,
     METHOD_NOTEPAD,
     open_file_with_fallback,
+    try_open_associated,
 )
 
 
@@ -186,3 +187,56 @@ def test_missing_file_does_not_call_startfile(
 
     assert result.success is False
     assert called == []
+
+
+# --- try_open_associated: только ассоциация, без подмены ---
+
+def test_associated_success(monkeypatch, tmp_path):
+    f = _make_file(tmp_path)
+    called: list[str] = []
+    _patch_startfile(monkeypatch, lambda p: called.append(p))
+
+    result = try_open_associated(str(f))
+
+    assert result.success is True
+    assert result.method == METHOD_ASSOC
+    assert called == [str(f)]
+
+
+def test_associated_missing_association(monkeypatch, tmp_path):
+    """Нет ассоциации — отказ, без Блокнота и Проводника."""
+    f = _make_file(tmp_path)
+    _patch_startfile(monkeypatch, OSError(1155, "no assoc"))
+    popen = _patch_popen(monkeypatch)
+
+    result = try_open_associated(str(f))
+
+    assert result.success is False
+    assert "связанной" in result.error
+    assert popen.calls == []
+
+
+def test_associated_empty_path():
+    result = try_open_associated("")
+
+    assert result.success is False
+    assert "не задан" in result.error.lower()
+
+
+def test_associated_missing_file(tmp_path):
+    missing = tmp_path / "gone.md"
+
+    result = try_open_associated(str(missing))
+
+    assert result.success is False
+    assert "не найден" in result.error.lower()
+
+
+def test_associated_without_startfile(monkeypatch, tmp_path):
+    f = _make_file(tmp_path)
+    _patch_startfile_missing(monkeypatch)
+
+    result = try_open_associated(str(f))
+
+    assert result.success is False
+    assert "недоступны" in result.error.lower()

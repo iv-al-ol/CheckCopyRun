@@ -129,7 +129,7 @@ def test_apply_keeps_needed_dirs(tmp_path):
     )
     current = _state({})
     plan = build_plan(target, current, store)
-    result = apply_plan(plan, target, str(dst))
+    apply_plan(plan, target, str(dst))
 
     assert (dst / "keep").is_dir()
     assert (dst / "keep" / "a.txt").read_bytes() == b"x"
@@ -178,7 +178,7 @@ def test_apply_skips_service_paths(tmp_path):
     plan = build_plan(target, current, store)
 
     assert plan.to_restore == []
-    result = apply_plan(plan, target, str(dst))
+    apply_plan(plan, target, str(dst))
     assert not (dst / "!CCRun" / "evil.json").exists()
 
 

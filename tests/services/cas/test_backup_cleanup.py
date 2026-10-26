@@ -141,7 +141,7 @@ def test_cleanup_keep_last_protects_current(tmp_path, dst):
     policy = CleanupPolicy(
         keep_last_enabled=True, keep_last_n=2,
     )
-    result = cleanup_states(str(dst), policy)
+    cleanup_states(str(dst), policy)
 
     remaining = StateStore(str(dst)).list()
     remaining_names = {s.path.name for s in remaining}
@@ -175,7 +175,7 @@ def test_cleanup_delete_older(tmp_path, dst):
     policy = CleanupPolicy(
         delete_older_enabled=True, delete_older_days=30,
     )
-    result = cleanup_states(str(dst), policy)
+    cleanup_states(str(dst), policy)
 
     remaining = StateStore(str(dst)).list()
     remaining_names = {s.path.name for s in remaining}
@@ -187,10 +187,10 @@ def test_cleanup_gc_blobs(tmp_path, dst):
     """После удаления состояний blob-ы, на которые больше никто
     не ссылается, удаляются."""
     # state1 = {a.txt: old_a}
-    name1 = _make_state(dst, tmp_path, {"a.txt": b"old_a"})
+    _make_state(dst, tmp_path, {"a.txt": b"old_a"})
     time.sleep(0.005)
     # state2 = {a.txt: new_a}
-    name2 = _make_state(dst, tmp_path, {"a.txt": b"new_a"})
+    _make_state(dst, tmp_path, {"a.txt": b"new_a"})
     time.sleep(0.005)
     # state3 = {a.txt: latest_a}
     name3 = _make_state(dst, tmp_path, {"a.txt": b"latest_a"})
@@ -203,7 +203,7 @@ def test_cleanup_gc_blobs(tmp_path, dst):
     policy = CleanupPolicy(
         keep_last_enabled=True, keep_last_n=1,
     )
-    result = cleanup_states(str(dst), policy)
+    cleanup_states(str(dst), policy)
 
     # Остались name3 (текущий, самый свежий).
     remaining = StateStore(str(dst)).list()
@@ -234,7 +234,7 @@ def test_cleanup_keep_last_n_zero(tmp_path, dst):
     policy = CleanupPolicy(
         keep_last_enabled=True, keep_last_n=0,
     )
-    result = cleanup_states(str(dst), policy)
+    cleanup_states(str(dst), policy)
 
     remaining = StateStore(str(dst)).list()
     assert len(remaining) == 1

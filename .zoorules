@@ -85,7 +85,8 @@
 
 ## 10. Build & Distribution
 - **Build**: `uv run build.py` (folder), `uv run build.py --onefile` (single `.exe`), `uv run build.py --debug` (with console).
-- **Artifact**: `build/CCRun.exe` (or `build/CCRun.dist/CCRun.exe`). Exe name — `CCRun`; product name — `Check, Copy & Run`; company — `CheckCopyRun`. Version — from `config/constants.py::APP_VERSION`.
+- **Artifact**: `build/CCRun.exe` (or `build/CheckCopyRun.dist/CCRun.exe`). Exe name — `CCRun`; folder name — `CheckCopyRun`; product name — `Check, Copy & Run`; company — `CheckCopyRun`. Version — from `config/constants.py::APP_VERSION`.
 - **Icon**: `assets/icon.ico`. Embedded via `--windows-icon-from-ico`, copied as data via `--include-data-dir`.
+- **Shipped docs**: `README.md` via `--include-data-files`, lands next to the exe. Opened from Settings → «Описание»: first through the `.md` association (`try_open_associated`), then in the built-in viewer (`ui/dialogs/readme_view.py`) if there is none.
 - **Entrypoint**: `main.py`. Nuitka builds exactly this file.
 - **Not shipped**: `tests/`, `pytest`, `ruff`, `mypy`, `pip`, `setuptools` — listed in `build.py::_NOFOLLOW_IMPORTS`.

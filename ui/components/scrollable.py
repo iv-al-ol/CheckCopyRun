@@ -133,8 +133,10 @@ class AutoHideScrollableFrame(ctk.CTkScrollableFrame):
         if event is not None and event.widget is self._parent_canvas:
             try:
                 self.configure(width=event.width)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "canvas configure(width=%s): %r", event.width, exc,
+                )
         self._schedule_settle(immediate=False)
 
     def _schedule_settle(self, immediate: bool) -> None:

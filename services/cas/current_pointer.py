@@ -47,7 +47,7 @@ class CurrentData:
 class CurrentPointer:
     """Управляет current.json для одного destination."""
 
-    def __init__(self, destination: str | Path):
+    def __init__(self, destination: str | Path) -> None:
         raw = Path(destination) / CCRUN_DIR_NAME / CURRENT_FILENAME
         self._path = Path(to_long_path(str(raw)))
 

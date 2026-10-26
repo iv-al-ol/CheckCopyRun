@@ -126,7 +126,7 @@ def test_ui_info_current(tmp_path, dst):
 
 
 def test_ui_info_restore_point(tmp_path, dst):
-    name = _make_state(
+    _make_state(
         dst, tmp_path, {"a.txt": b"a"},
         kind=STATE_KIND_RESTORE_POINT,
     )
@@ -180,7 +180,7 @@ def test_delete_current_forbidden(tmp_path, dst):
 
 
 def test_delete_missing(tmp_path, dst):
-    ok, err = delete_state(
+    ok, _err = delete_state(
         str(dst), "state_1999.01.01_00.00.00.000.json",
     )
     assert ok is False

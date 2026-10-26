@@ -252,7 +252,8 @@ def open_folder_in_explorer(path: str) -> bool:
         return False
 
     try:
-        subprocess.Popen(["explorer", path])
+        # explorer — системная утилита Windows, аргумент один.
+        subprocess.Popen(["explorer", path])  # noqa: S603, S607
     except OSError as exc:
         logger.error("Не удалось открыть папку %s: %r", path, exc)
         return False

@@ -6,7 +6,7 @@
 
 Fallback: ExtractIconExW (shell32.dll) с извлечением всех иконок
 и выбором наибольшей. Количество ограничено сверху, чтобы
-случайный «мусорный»返回值 не привёл к попытке выделить гигабайты.
+случайный «мусорный» возврат не привёл к попытке выделить гигабайты.
 
 Все операции в try/except — функция save_exe_icon никогда не
 бросает наружу, возвращает None при любой проблеме. Это
@@ -36,7 +36,7 @@ _MAX_ICON_COUNT = 512
 
 # --- DLL ---
 
-def _load_dll(name: str):
+def _load_dll(name: str) -> ctypes.WinDLL | None:
     try:
         return ctypes.WinDLL(name, use_last_error=True)
     except OSError as exc:
@@ -59,7 +59,12 @@ HGDIOBJ = wintypes.HANDLE
 
 # --- Прототипы ---
 
-def _setup_proto(dll, name, argtypes, restype):
+def _setup_proto(
+    dll: ctypes.WinDLL | None,
+    name: str,
+    argtypes: list[type],
+    restype: type,
+) -> object | None:
     if dll is None:
         return None
     func = getattr(dll, name, None)
@@ -207,7 +212,7 @@ class BITMAPINFO(ctypes.Structure):
 
 # --- HICON → PIL.Image ---
 
-def _hicon_to_image(hicon):
+def _hicon_to_image(hicon: int) -> object | None:
     """HICON → PIL.Image. None при любой ошибке."""
     for func in (
         _get_icon_info, _get_dibits, _get_object_w,
@@ -312,7 +317,7 @@ def _hicon_to_image(hicon):
 
 # --- Путь 1: PrivateExtractIconsW ---
 
-def _extract_via_private(exe_path: Path, size: int):
+def _extract_via_private(exe_path: Path, size: int) -> object | None:
     """PrivateExtractIconsW — иконка заданного размера одним вызовом."""
     if _private_extract_icons is None:
         return None
@@ -344,7 +349,7 @@ def _extract_via_private(exe_path: Path, size: int):
 
 # --- Путь 2: ExtractIconExW + наибольшая ---
 
-def _hicon_size(hicon) -> int:
+def _hicon_size(hicon: int) -> int:
     """Ширина bitmap иконки. 0 при ошибке."""
     if _get_icon_info is None:
         return 0
@@ -385,7 +390,7 @@ def _hicon_size(hicon) -> int:
             logger.debug("DeleteObject size: %r", exc)
 
 
-def _extract_largest_via_enum(exe_path: Path):
+def _extract_largest_via_enum(exe_path: Path) -> object | None:
     """ExtractIconExW: извлекаем все, выбираем наибольшую."""
     if _extract_icon_ex is None:
         return None
@@ -512,7 +517,7 @@ def save_exe_icon(exe_path: Path, out_dir: Path) -> Path | None:
             logger.error("Не удалось создать %s: %r", out_dir, exc)
             return None
 
-        digest = hashlib.sha1(
+        digest = hashlib.sha256(
             str(exe_path.resolve()).encode("utf-8"),
         ).hexdigest()[:16]
         out_path = out_dir / f"exe_{digest}.png"

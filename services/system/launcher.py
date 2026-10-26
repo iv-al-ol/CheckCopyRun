@@ -56,7 +56,8 @@ def launch_exe(path: str | os.PathLike) -> None:
     name = abs_p.name
 
     try:
-        subprocess.Popen(
+        # Список аргументов без shell: подстановки команд нет.
+        subprocess.Popen(  # noqa: S603
             [name],
             cwd=cwd,
             close_fds=True,

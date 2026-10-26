@@ -25,12 +25,14 @@ select_startup_candidates — чистая функция, тестируетс�
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Protocol
 
-from core.models import Profile
+from core.models import AppSettings, Profile
 from core.paths import ensure_directory
 from core.settings_store import save_settings
 from services.cas.current_pointer import CurrentPointer
 from services.copy.copy_service import (
+    CopyProgress,
     CopyResult,
     CopyService,
     format_cancel_status,
@@ -78,16 +80,47 @@ def select_startup_candidates(
     return candidates, skipped
 
 
+class StartupCheckHost(Protocol):
+    """Минимальный контракт главного окна, нужный очереди.
+
+    Структурная типизация: `services/` не может импортировать `ui/`,
+    поэтому вместо MainWindow описываем только используемые члены.
+    """
+
+    settings: AppSettings
+
+    def after(self, ms: int, func: Callable[[], None]) -> str:
+        """Планирует вызов func через ms миллисекунд."""
+        ...
+
+    def start_copy_with_ui(
+        self,
+        *,
+        source: str,
+        destination: str,
+        create_backup: bool,
+        hash_cache_enabled: bool,
+        mirror_mode: bool,
+        profile_name: str = "",
+        is_startup_check: bool = False,
+        on_progress: Callable[[CopyProgress], None],
+        on_done: Callable[[CopyResult], None],
+        on_error: Callable[[str], None],
+    ) -> bool:
+        """Запускает копирование через UI. False — занято."""
+        ...
+
+
 class StartupCheckQueue:
     """Последовательная очередь автопроверки."""
 
     def __init__(
         self,
-        window,
+        window: StartupCheckHost,
         copy_service: CopyService,
         set_status_progress: Callable[[str, float | None], None],
         on_finish: Callable[[], None],
-    ):
+    ) -> None:
         self._window = window
         self._copy_service = copy_service
         self._set_status_progress = set_status_progress
@@ -232,7 +265,7 @@ class StartupCheckQueue:
             )
             self._window.after(_NEXT_DELAY_MS, self._process_next)
 
-    def _on_progress(self, progress) -> None:
+    def _on_progress(self, progress: CopyProgress) -> None:
         header = f"Автопроверка {self._index}/{self._total}"
         self._set_status_progress(
             header, progress.percent / 100.0,

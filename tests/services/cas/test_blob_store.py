@@ -7,7 +7,7 @@ import hashlib
 import pytest
 
 from services.cas.blob_store import (
-    BlobHashMismatch,
+    BlobHashMismatchError,
     BlobStore,
 )
 
@@ -46,7 +46,7 @@ def test_put_hash_mismatch(tmp_path):
     src = tmp_path / "f.bin"
     src.write_bytes(b"hello")
 
-    with pytest.raises(BlobHashMismatch):
+    with pytest.raises(BlobHashMismatchError):
         store.put(src, "0" * 64)
 
     # Мусорный blob не остался.

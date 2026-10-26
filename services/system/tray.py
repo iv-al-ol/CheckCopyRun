@@ -32,7 +32,7 @@ class TrayIcon:
         title: str,
         on_show: Callable[[], None],
         on_quit: Callable[[], None],
-    ):
+    ) -> None:
         self._icon_path = Path(icon_path)
         self._title = title
         self._on_show = on_show
@@ -111,13 +111,13 @@ class TrayIcon:
 
     # --- Обработчики ---
 
-    def _handle_show(self, *args) -> None:
+    def _handle_show(self, *_args: object) -> None:
         try:
             self._on_show()
         except Exception as exc:
             logger.error(f"ошибка в обработчике «Показать»: {exc!r}")
 
-    def _handle_quit(self, *args) -> None:
+    def _handle_quit(self, *_args: object) -> None:
         try:
             self._on_quit()
         except Exception as exc:

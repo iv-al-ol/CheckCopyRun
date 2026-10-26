@@ -332,8 +332,8 @@ class _BackupListDialog:
             px = py = 100
             pw = ph = 1200
 
-        dw = int(round(_DIALOG_WIDTH * scaling))
-        dh = int(round(_DIALOG_HEIGHT * scaling))
+        dw = round(_DIALOG_WIDTH * scaling)
+        dh = round(_DIALOG_HEIGHT * scaling)
 
         x = px + max(0, (pw - dw) // 2)
         y = py + max(0, (ph - dh) // 2)

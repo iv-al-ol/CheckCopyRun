@@ -70,7 +70,7 @@ class HashCache:
         *,
         enabled: bool = True,
         algorithm: str = HASH_CACHE_ALGORITHM,
-    ):
+    ) -> None:
         self._destination = Path(destination)
         self._enabled = enabled
         self._algorithm = algorithm

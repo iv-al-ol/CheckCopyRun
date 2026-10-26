@@ -78,7 +78,7 @@ def test_initial_auto_with_cached_png(tmp_path):
     icons_dir = tmp_path / "icons"
     icons_dir.mkdir()
 
-    digest = hashlib.sha1(
+    digest = hashlib.sha256(
         str(exe.resolve()).encode("utf-8"),
     ).hexdigest()[:16]
     cached = icons_dir / f"exe_{digest}.png"

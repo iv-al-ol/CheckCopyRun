@@ -117,7 +117,7 @@ class StatusBar(ctk.CTkFrame):
 
         v = max(0.0, min(1.0, float(value)))
         self.progress.set(v)
-        self.percent_label.configure(text=f"{int(round(v * 100))}%")
+        self.percent_label.configure(text=f"{round(v * 100)}%")
 
     def show_cancel_button(self, show: bool) -> None:
         """Показать / скрыть кнопку «Отмена».

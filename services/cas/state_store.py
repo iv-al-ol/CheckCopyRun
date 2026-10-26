@@ -139,7 +139,7 @@ class StateInfo:
 class StateStore:
     """Управляет state-файлами одного destination."""
 
-    def __init__(self, destination: str | Path):
+    def __init__(self, destination: str | Path) -> None:
         raw = (
             Path(destination) / CCRUN_DIR_NAME / STATES_DIR_NAME
         )

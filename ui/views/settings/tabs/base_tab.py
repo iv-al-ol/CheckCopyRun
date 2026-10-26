@@ -25,10 +25,10 @@ class SettingsTab(ctk.CTkFrame):
         """Вызывается при показе вкладки. Переопределяется."""
 
     def save_and_notify(self, status: str) -> None:
-        """Сохраняет настройки и выставляет статус."""
-        try:
-            save_settings(self.window.settings)
-        except Exception:
-            # Ошибку сохранения обработает window.save_settings_now.
-            pass
+        """Сохраняет настройки и выставляет статус.
+
+        `save_settings` не пробрасывает исключения: все ошибки
+        записи `settings.dat` логируются внутри неё самой.
+        """
+        save_settings(self.window.settings)
         self.window.set_status(status)

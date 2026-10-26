@@ -11,6 +11,9 @@
 from __future__ import annotations
 
 from ui.components.popup_utils import is_inside
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Задержка перед проверкой позиции указателя после <Leave>.
 _HOVER_CHECK_DELAY_MS = 20
@@ -32,15 +35,18 @@ class HoverMixin:
     def _hover_on_leave(self, _event=None) -> None:
         try:
             self.after(_HOVER_CHECK_DELAY_MS, self._hover_check)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("hover: after() не удался: %r", exc)
+            self._hover = False
+            self._apply_hover_bg(False)
 
     def _hover_check(self) -> None:
         try:
             under = self.winfo_containing(
                 self.winfo_pointerx(), self.winfo_pointery(),
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug("hover: winfo_containing: %r", exc)
             return
         if under is None or not is_inside(under, self):
             if self._hover:

@@ -234,7 +234,7 @@ class _CopyWorker(WorkerEventsMixin, threading.Thread):
         on_progress: Callable[[CopyProgress], None],
         on_done: Callable[[CopyResult], None],
         on_error: Callable[[str], None],
-    ):
+    ) -> None:
         super().__init__(name="CopyWorker", daemon=True)
         self._source = source
         self._destination = destination
@@ -463,10 +463,29 @@ class _CopyWorker(WorkerEventsMixin, threading.Thread):
 
     # --- CAS: состояния ---
 
+    def _cas_ready(self) -> bool:
+        """Проверяет, что CAS-компоненты инициализированы.
+
+        Заменяет assert: под `python -O` он вырезается, и обращение
+        к None упало бы с AttributeError вместо понятной ошибки в логе.
+
+        Returns:
+            bool: True, если StateStore, BlobStore и CurrentPointer готовы.
+        """
+        if (
+            self._state_store is not None
+            and self._blobs is not None
+            and self._current is not None
+        ):
+            return True
+        logger.error(
+            "CAS не инициализирован — операция пропущена",
+        )
+        return False
+
     def _ensure_state_before(self) -> None:
-        assert self._state_store is not None
-        assert self._blobs is not None
-        assert self._current is not None
+        if not self._cas_ready():
+            return
 
         try:
             file_list = list_user_files(self._destination)
@@ -520,9 +539,8 @@ class _CopyWorker(WorkerEventsMixin, threading.Thread):
             )
 
     def _ensure_state_after(self) -> None:
-        assert self._state_store is not None
-        assert self._blobs is not None
-        assert self._current is not None
+        if not self._cas_ready():
+            return
 
         if not self._changed:
             if self._result.state_before_path:
@@ -641,7 +659,12 @@ class _CopyWorker(WorkerEventsMixin, threading.Thread):
     def _find_or_create_state(
         self, data: StateData, *, kind_state: str,
     ) -> tuple[str, bool]:
-        assert self._state_store is not None
+        if self._state_store is None:
+            logger.error(
+                "state_store не инициализирован — state_%s не создан",
+                kind_state,
+            )
+            return "", False
 
         existing = self._find_matching_state(
             data, exclude_kinds={STATE_KIND_RESTORE_POINT},
@@ -679,8 +702,12 @@ class _CopyWorker(WorkerEventsMixin, threading.Thread):
         )
 
     def _load_current_state(self) -> StateData | None:
-        assert self._current is not None
-        assert self._state_store is not None
+        if self._current is None or self._state_store is None:
+            logger.error(
+                "CAS не инициализирован — current state не прочитан",
+            )
+            return None
+
         cur = self._current.load()
         if cur is None or not cur.state:
             return None
@@ -939,8 +966,11 @@ class _CopyWorker(WorkerEventsMixin, threading.Thread):
             )
 
     def _get_rollback_target(self) -> StateData | None:
-        assert self._state_store is not None
-        assert self._current is not None
+        if self._state_store is None or self._current is None:
+            logger.error(
+                "CAS не инициализирован — откат невозможен",
+            )
+            return None
 
         if self._result.state_before_path:
             try:
@@ -1034,7 +1064,7 @@ class CopyService:
     def __init__(
         self,
         scheduler: Callable[[Callable[[], None]], None] | None = None,
-    ):
+    ) -> None:
         self._scheduler = scheduler or (lambda fn: fn())
         self._lock = threading.Lock()
         self._worker: _CopyWorker | None = None

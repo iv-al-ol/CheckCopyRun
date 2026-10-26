@@ -506,7 +506,10 @@ class Sidebar(ctk.CTkFrame):
                 w = item.winfo_width()
                 h = item.winfo_height()
                 result[pid] = (x, y, x + w, y + h)
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "геометрия пункта %r недоступна: %r", pid, exc,
+                )
                 continue
         return result
 

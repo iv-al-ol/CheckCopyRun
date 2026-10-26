@@ -56,7 +56,7 @@ class DpapiError(RuntimeError):
     pass
 
 
-def _to_blob(data: bytes):
+def _to_blob(data: bytes) -> tuple[DATA_BLOB, ctypes.Array[ctypes.c_char]]:
     buf = ctypes.create_string_buffer(data, len(data))
     blob = DATA_BLOB(
         cbData=len(data),

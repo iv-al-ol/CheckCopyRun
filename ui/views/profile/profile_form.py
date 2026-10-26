@@ -123,7 +123,6 @@ class ProfileForm(ctk.CTkFrame):
         on_backup_toggle: Callable[[], None],
         on_run_after_toggle: Callable[[], None],
         on_check_on_startup_toggle: Callable[[], None],
-        on_check_periodically_toggle: Callable[[], None],
         on_mirror_toggle: Callable[[], None],
         on_notify_changes_toggle: Callable[[], None],
         on_notify_message_toggle: Callable[[], None],
@@ -182,25 +181,6 @@ class ProfileForm(ctk.CTkFrame):
             pady=HintLabel.item_pady_plain(),
         )
 
-        self._check_periodically_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            self,
-            text="Периодически проверять директорию",
-            variable=self._check_periodically_var,
-            command=on_check_periodically_toggle,
-        ).grid(
-            row=5, column=0, sticky="w",
-            pady=HintLabel.item_pady(),
-        )
-
-        HintLabel(
-            self,
-            text=(
-                "Выполняется периодическая проверка изменений "
-                "в директории. Период проверки задается в настройках."
-            ),
-        ).place_in_grid(row=6, padx=0)
-
         self._run_after_var = ctk.BooleanVar(value=False)
         self._run_after_cb = ctk.CTkCheckBox(
             self,
@@ -209,7 +189,7 @@ class ProfileForm(ctk.CTkFrame):
             command=on_run_after_toggle,
         )
         self._run_after_cb.grid(
-            row=7, column=0, sticky="w",
+            row=5, column=0, sticky="w",
             pady=HintLabel.item_pady_plain(),
         )
 
@@ -220,7 +200,7 @@ class ProfileForm(ctk.CTkFrame):
             variable=self._mirror_var,
             command=on_mirror_toggle,
         ).grid(
-            row=8, column=0, sticky="w",
+            row=6, column=0, sticky="w",
             pady=HintLabel.item_pady(),
         )
 
@@ -230,7 +210,7 @@ class ProfileForm(ctk.CTkFrame):
                 "Файлы и папки, которых нет в папке источника, "
                 "будут убраны из папки."
             ),
-        ).place_in_grid(row=9, padx=0)
+        ).place_in_grid(row=7, padx=0)
 
         # Уведомления по умолчанию выключены.
         self._notify_changes_var = ctk.BooleanVar(value=False)
@@ -240,14 +220,14 @@ class ProfileForm(ctk.CTkFrame):
             variable=self._notify_changes_var,
             command=on_notify_changes_toggle,
         ).grid(
-            row=10, column=0, sticky="w",
+            row=8, column=0, sticky="w",
             pady=HintLabel.item_pady_plain(),
         )
 
         self._notify_message_var = ctk.BooleanVar(value=False)
         notify_msg_row = ctk.CTkFrame(self, fg_color="transparent")
         notify_msg_row.grid(
-            row=11, column=0, sticky="ew",
+            row=9, column=0, sticky="ew",
             pady=HintLabel.item_pady(),
         )
         notify_msg_row.grid_columnconfigure(0, weight=1)
@@ -280,7 +260,7 @@ class ProfileForm(ctk.CTkFrame):
                 "Файл составляется автором папки источника. "
                 "Файл не копируется в целевую папку."
             ),
-        ).place_in_grid(row=12, padx=0)
+        ).place_in_grid(row=10, padx=0)
 
     # --- Свойства чекбоксов ---
 
@@ -295,10 +275,6 @@ class ProfileForm(ctk.CTkFrame):
     @property
     def check_on_startup(self) -> bool:
         return bool(self._check_on_startup_var.get())
-
-    @property
-    def check_periodically(self) -> bool:
-        return bool(self._check_periodically_var.get())
 
     @property
     def mirror_mode(self) -> bool:
@@ -327,7 +303,6 @@ class ProfileForm(ctk.CTkFrame):
         create_backup: bool,
         run_after_copy: bool,
         check_on_startup: bool,
-        check_periodically: bool = False,
         mirror_mode: bool,
         notify_on_changes: bool = False,
         notify_on_message: bool = False,
@@ -337,7 +312,6 @@ class ProfileForm(ctk.CTkFrame):
         self._exe_row.set_value(exe_name)
         self._backup_var.set(create_backup)
         self._check_on_startup_var.set(check_on_startup)
-        self._check_periodically_var.set(check_periodically)
         self._mirror_var.set(mirror_mode)
         self._notify_changes_var.set(notify_on_changes)
         self._notify_message_var.set(notify_on_message)

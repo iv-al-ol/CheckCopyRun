@@ -287,10 +287,10 @@ def capture_geometry(window) -> str | None:
         return None
 
     scaling = get_dpi_scaling(window) or 1.0
-    lw = int(round(w / scaling))
-    lh = int(round(h / scaling))
-    lx = int(round(x / scaling))
-    ly = int(round(y / scaling))
+    lw = round(w / scaling)
+    lh = round(h / scaling)
+    lx = round(x / scaling)
+    ly = round(y / scaling)
     return f"{lw}x{lh}+{lx}+{ly}"
 
 

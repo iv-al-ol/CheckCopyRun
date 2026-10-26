@@ -118,6 +118,35 @@ def get_asset_path(name: str) -> Path:
     return get_resource_root() / "assets" / name
 
 
+def get_doc_path(name: str) -> Path | None:
+    """Файл документации рядом с программой или в корне проекта.
+
+    Собранная версия кладёт README.md рядом с .exe, а при
+    onefile-сборке — в распакованный каталог: там `__file__`
+    указывает внутрь него. Поэтому проверяем оба варианта.
+    """
+    candidates: list[Path] = []
+
+    try:
+        candidates.append(Path(sys.executable).resolve().parent / name)
+    except Exception as exc:  # pragma: no cover - защитный
+        logger.debug("sys.executable недоступен: %r", exc)
+
+    try:
+        candidates.append(Path(__file__).resolve().parent.parent / name)
+    except Exception as exc:  # pragma: no cover - защитный
+        logger.debug("__file__ недоступен: %r", exc)
+
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError as exc:
+            logger.debug("проверка %s: %r", candidate, exc)
+
+    return None
+
+
 # --- Длинные пути Windows ---
 
 MAX_PATH = 260

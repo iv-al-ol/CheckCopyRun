@@ -281,15 +281,15 @@ class ToastWindow(ctk.CTkToplevel):
                 logger.debug("toast screen size: %r", exc)
                 return
 
-        width_phys = int(round(_WIDTH * scaling))
+        width_phys = round(_WIDTH * scaling)
         x_phys = (
             screen_w_phys - width_phys
-            - int(round(_MARGIN_X * scaling))
+            - round(_MARGIN_X * scaling)
         )
         y_phys = (
             screen_h_phys
             - self._height_physical
-            - int(round(_MARGIN_Y * scaling))
+            - round(_MARGIN_Y * scaling)
             - self._y_bottom_offset_phys
         )
 
@@ -462,9 +462,7 @@ class ToastManager:
         offset_phys = 0
         for window in self._active:
             window.set_bottom_offset_physical(offset_phys)
-            gap_phys = int(
-                round(_STACK_GAP * window.scaling)
-            )
+            gap_phys = round(_STACK_GAP * window.scaling)
             offset_phys += window.height_physical + gap_phys
 
     def _on_closed(self, window: ToastWindow) -> None:

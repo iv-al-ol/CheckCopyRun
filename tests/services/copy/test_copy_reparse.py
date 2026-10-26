@@ -45,8 +45,8 @@ def _try_make_junction(link: Path, target: Path) -> bool:
     Нам нужен только `returncode`.
     """
     try:
-        result = subprocess.run(
-            [
+        result = subprocess.run(  # noqa: S603
+            [  # noqa: S607
                 "cmd", "/c", "mklink", "/J",
                 str(link), str(target),
             ],

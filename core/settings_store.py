@@ -192,7 +192,7 @@ def _from_dict(data: dict) -> AppSettings:
                 idx, exc,
             )
 
-    def _int(value, default: int, min_v: int = 1) -> int:
+    def _int(value: object, default: int, min_v: int = 1) -> int:
         try:
             n = int(value)
         except (TypeError, ValueError):

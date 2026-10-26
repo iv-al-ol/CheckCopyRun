@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import filecmp
+import os
 from dataclasses import dataclass
 from enum import Enum
 
@@ -146,8 +147,8 @@ def _hash_both(
     dst_path: str,
     rel_path: str,
     cache: HashCache,
-    src_stat,
-    dst_stat,
+    src_stat: os.stat_result,
+    dst_stat: os.stat_result,
 ) -> CompareOutcome:
     try:
         src_hash = hash_file(src_path, cache.algorithm)
@@ -192,7 +193,7 @@ def _hash_both(
 def _legacy_compare(
     src_path: str,
     dst_path: str,
-    src_stat,
+    src_stat: os.stat_result,
 ) -> CompareOutcome:
     try:
         same = filecmp.cmp(

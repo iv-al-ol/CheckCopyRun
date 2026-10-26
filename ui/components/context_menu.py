@@ -43,6 +43,7 @@ from ui.components.separator import make_separator
 from ui.fonts import get_emoji_font, get_font
 from ui.palette import (
     DANGER_HOVER,
+    DANGER_LABEL,
     DANGER_TEXT,
     SURFACE_BG,
     SURFACE_BORDER,
@@ -106,7 +107,12 @@ class _MenuRow(ctk.CTkFrame):
         self._danger = danger
         self._hover = False
 
-        text_color = DANGER_TEXT if danger else SURFACE_TEXT
+        # Опасный пункт в покое — приглушённо-красный: белый на
+        # светлой поверхности меню не читается. При наведении фон
+        # становится тёмно-красным, и текст переключается на белый.
+        text_color = DANGER_LABEL if danger else SURFACE_TEXT
+        self._idle_text_color = text_color
+        self._hover_text_color = DANGER_TEXT if danger else SURFACE_TEXT
 
         icon_wrapper = ctk.CTkFrame(
             self,
@@ -130,6 +136,7 @@ class _MenuRow(ctk.CTkFrame):
                 font=get_emoji_font(_EMOJI_FONT_SIZE),
             )
             icon_label.pack(fill="both", expand=True)
+        self._icon_label = icon_label
 
         self._text_label = ctk.CTkLabel(
             self,
@@ -194,10 +201,31 @@ class _MenuRow(ctk.CTkFrame):
             color = DANGER_HOVER if self._danger else SURFACE_HOVER
         else:
             color = "transparent"
+
         try:
             self.configure(fg_color=color)
         except Exception as exc:
             logger.debug("apply_bg: %r", exc)
+
+        self._apply_text_color()
+
+    def _apply_text_color(self) -> None:
+        """Цвет текста пункта: белый только на заливке."""
+        if not self._danger:
+            return
+
+        color = (
+            self._hover_text_color if self._hover
+            else self._idle_text_color
+        )
+        labels = [self._text_label, self._icon_label]
+        for label in labels:
+            if label is None:
+                continue
+            try:
+                label.configure(text_color=color)
+            except Exception as exc:
+                logger.debug("apply_text_color: %r", exc)
 
 
 class ContextMenu:

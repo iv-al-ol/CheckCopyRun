@@ -215,7 +215,7 @@ class IconPickerState:
     def _lookup_cached_exe_png(self, exe_path: Path) -> Path | None:
         """Ищет уже извлечённый PNG для этого exe в icons_dir."""
         try:
-            digest = hashlib.sha1(
+            digest = hashlib.sha256(
                 str(exe_path.resolve()).encode("utf-8"),
             ).hexdigest()[:16]
         except OSError as exc:

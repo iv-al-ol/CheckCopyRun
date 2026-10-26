@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 
 __all__ = [
     "BlobError",
-    "BlobHashMismatch",
+    "BlobHashMismatchError",
     "BlobStore",
 ]
 
@@ -46,7 +46,7 @@ class BlobError(RuntimeError):
     """Базовая ошибка хранилища blob-ов."""
 
 
-class BlobHashMismatch(BlobError):
+class BlobHashMismatchError(BlobError):
     """Хэш фактического содержимого не совпал с ожидаемым."""
 
 
@@ -61,7 +61,7 @@ def _safe_unlink(path: str) -> None:
 class BlobStore:
     """Хранилище уникальных файлов по sha256."""
 
-    def __init__(self, destination: str | Path):
+    def __init__(self, destination: str | Path) -> None:
         raw = (
             Path(destination) / CCRUN_DIR_NAME / BLOBS_DIR_NAME
         )
@@ -103,7 +103,7 @@ class BlobStore:
     ) -> bool:
         """Копирует файл в pool. Возвращает True, если blob новый."""
         if not _is_sha256(sha256):
-            raise BlobHashMismatch(
+            raise BlobHashMismatchError(
                 f"Некорректный sha256: {sha256!r}"
             )
 
@@ -143,7 +143,7 @@ class BlobStore:
         actual = h.hexdigest()
         if actual != sha256:
             _safe_unlink(tmp)
-            raise BlobHashMismatch(
+            raise BlobHashMismatchError(
                 f"Хэш {src_path} не совпал: "
                 f"ожидался {sha256}, получен {actual}"
             )

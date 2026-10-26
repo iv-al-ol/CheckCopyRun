@@ -227,10 +227,15 @@ class _IconPickerDialog:
             )
         else:
             exe_path = self._state.exe_path
-            assert exe_path is not None
-            self._auto_hint.configure(
-                text=f"Источник: {exe_path.name}",
-            )
+            if exe_path is None:
+                logger.error(
+                    "Диалог иконки: auto_available без exe_path",
+                )
+                self._auto_checkbox.configure(state="disabled")
+            else:
+                self._auto_hint.configure(
+                    text=f"Источник: {exe_path.name}",
+                )
 
     def _add_separator(self, row: int) -> int:
         sep = make_separator(self._dialog)
