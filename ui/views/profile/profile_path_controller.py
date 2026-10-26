@@ -4,11 +4,8 @@
 get_profile(). Сохранение и перерисовку делает View через
 on_changed(); обновление состояния кнопок — через on_state_refresh().
 
-Логика выбора — в profile_paths. Здесь только связывание:
-диалог → проверка → запись в profile → notify.
-
-Извлечение иконки из exe обёрнуто в защиту — если оно падает,
-выбор exe всё равно сохраняется.
+Проверки файлов идут через `long_io` — на длинных путях
+`os.path.isfile` / `os.path.isdir` дают ложный False.
 """
 
 from __future__ import annotations
@@ -17,6 +14,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
+from core import long_io
 from core.models import Profile
 from core.paths import ensure_directory
 from core.settings_store import get_icons_dir
@@ -110,7 +108,8 @@ class ProfilePathController:
         if profile is None:
             return
 
-        if not (profile.source and os.path.isdir(profile.source)):
+        # long_io.isdir понимает `\\?\`; os.path.isdir — нет.
+        if not (profile.source and long_io.isdir(profile.source)):
             show_error(
                 self._window,
                 "Не выбрана исходная директория",
@@ -190,7 +189,8 @@ class ProfilePathController:
             return
 
         full = profile.exe_source_path()
-        if not full or not os.path.isfile(full):
+        # long_io.isfile понимает `\\?\`.
+        if not full or not long_io.isfile(full):
             return
 
         try:

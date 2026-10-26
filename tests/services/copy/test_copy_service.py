@@ -829,3 +829,35 @@ def test_no_new_state_when_already_in_backups(
         f"Copy создал {states_after_copy - states_before} "
         f"лишних state"
     )
+
+
+def test_states_equal_mixed_separators():
+    """_states_equal не различает / и \\ в путях."""
+    from services.cas.state_store import (
+        StateData,
+        StateFile,
+    )
+    from services.copy.copy_service import _CopyWorker
+
+    a = StateData(
+        files=[
+            StateFile(
+                path="sub/a.txt",
+                sha256="aa" * 32,
+                size=1, mtime="",
+            ),
+        ],
+        empty_dirs=["empty/dir"],
+    )
+    b = StateData(
+        files=[
+            StateFile(
+                path="sub\\a.txt",
+                sha256="aa" * 32,
+                size=1, mtime="",
+            ),
+        ],
+        empty_dirs=["empty\\dir"],
+    )
+
+    assert _CopyWorker._states_equal(a, b) is True

@@ -4,11 +4,7 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
-from config.constants import (
-    MONITOR_INTERVAL_MAX,
-    MONITOR_INTERVAL_MIN,
-    THEME_DEFAULT,
-)
+from config.constants import THEME_DEFAULT
 from services.system import autostart
 from ui.components.hint_label import HintLabel
 from ui.components.option_menu import StyledOptionMenu
@@ -23,7 +19,6 @@ _SECTION_FONT_SIZE = 14
 _BODY_FONT_SIZE = 13
 
 _OPTION_MENU_WIDTH = 220
-_ENTRY_WIDTH = 60
 
 _SECTION_PADY_TOP = 8
 
@@ -122,43 +117,6 @@ class GeneralTab(SettingsTab):
         # --- "Поведение" ---
         row = self._add_section_title(row, "Поведение")
 
-        # Период проверки директорий
-        interval_row = ctk.CTkFrame(self, fg_color="transparent")
-        interval_row.grid(
-            row=row, column=0, sticky="w",
-            padx=4, pady=HintLabel.item_pady(),
-        )
-        row += 1
-
-        ctk.CTkLabel(
-            interval_row, text="Период проверки директорий:", anchor="w",
-            font=get_font(_BODY_FONT_SIZE),
-        ).pack(side="left", padx=(0, 8))
-
-        self._interval_entry = ctk.CTkEntry(
-            interval_row, width=_ENTRY_WIDTH,
-        )
-        self._interval_entry.pack(side="left", padx=(0, 6))
-        self._interval_entry.bind("<Return>", self._on_interval_commit)
-        self._interval_entry.bind("<FocusOut>", self._on_interval_commit)
-
-        ctk.CTkLabel(
-            interval_row, text="мин.",
-            font=get_font(_BODY_FONT_SIZE),
-        ).pack(side="left")
-
-        HintLabel(
-            self,
-            text=(
-                f"От {MONITOR_INTERVAL_MIN} до {MONITOR_INTERVAL_MAX} мин. "
-                "Опрос читает только метаданные файлов (размер и "
-                "время изменения), содержимое не читается. Для "
-                "больших папок на сетевом диске рекомендуется "
-                "интервал не меньше 5 минут."
-            ),
-        ).place_in_grid(row=row)
-        row += 1
-
         self._hash_cache_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             self,
@@ -238,9 +196,6 @@ class GeneralTab(SettingsTab):
             bool(s.run_autocheck_on_restored)
         )
 
-        self._interval_entry.delete(0, "end")
-        self._interval_entry.insert(0, str(s.monitor_interval_min))
-
         if not autostart.is_supported():
             self._autostart_cb.configure(state="disabled")
 
@@ -309,33 +264,6 @@ class GeneralTab(SettingsTab):
         self.window.set_status(
             f"Автопроверка для восстановленных профилей {state}",
         )
-
-    def _on_interval_commit(self, _event=None) -> None:
-        raw = self._interval_entry.get().strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            self._restore_interval()
-            self.window.set_status(
-                "Интервал проверки: нужно целое число минут",
-            )
-            return
-
-        clamped = max(
-            MONITOR_INTERVAL_MIN,
-            min(MONITOR_INTERVAL_MAX, value),
-        )
-        self.window.settings.monitor_interval_min = clamped
-        self._restore_interval()
-        self.window.save_settings_now()
-        self.window.set_status(
-            f"Источник будет проверяться каждые {clamped} мин",
-        )
-
-    def _restore_interval(self) -> None:
-        value = self.window.settings.monitor_interval_min
-        self._interval_entry.delete(0, "end")
-        self._interval_entry.insert(0, str(value))
 
 
 def _label_to_theme_key(label: str) -> str | None:

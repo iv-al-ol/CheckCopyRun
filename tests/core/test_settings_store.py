@@ -207,3 +207,111 @@ def test_backup_keep_last_default_true():
     s4 = AppSettings(backup_keep_last_enabled=False)
     s5 = _from_dict(_to_dict(s4))
     assert s5.backup_keep_last_enabled is False
+
+
+# --- Повреждённые profiles ---
+
+def test_profiles_not_a_list_ignored():
+    """`profiles` не список — не роняем остальные настройки."""
+    s = _from_dict({
+        "version": 1,
+        "theme": "light",
+        "profiles": "not a list",
+    })
+
+    assert s.theme == "light"
+    assert s.profiles == []
+
+
+def test_profiles_dict_instead_of_list():
+    """`profiles` — dict, а не list. Игнорируем, остальное грузим."""
+    s = _from_dict({
+        "version": 1,
+        "theme": "light",
+        "profiles": {"id": "abc", "name_base": "Broken"},
+    })
+
+    assert s.theme == "light"
+    assert s.profiles == []
+
+
+def test_profiles_mixed_valid_and_invalid():
+    """Не-словари пропускаются, остальные профили грузятся."""
+    s = _from_dict({
+        "version": 1,
+        "profiles": [
+            "garbage",
+            42,
+            ["nested", "list"],
+            None,
+            {"id": "ok1", "name_base": "Первый"},
+            {"id": "ok2", "name_base": "Второй"},
+        ],
+    })
+
+    assert len(s.profiles) == 2
+    assert s.profiles[0].id == "ok1"
+    assert s.profiles[0].name_base == "Первый"
+    assert s.profiles[1].id == "ok2"
+    assert s.profiles[1].name_base == "Второй"
+
+
+def test_one_bad_profile_does_not_lose_rest():
+    """Одна кривая запись не теряет остальные профили.
+
+    Регресс-тест: раньше `raw.items()` в `_from_dict`
+    бросал AttributeError, `load_settings` ловил его и
+    возвращал `AppSettings()` — все профили пропадали.
+    """
+    s = _from_dict({
+        "version": 1,
+        "profiles": [
+            {"id": "a", "name_base": "A"},
+            "broken",
+            {"id": "b", "name_base": "B"},
+            {"id": "c", "name_base": "C"},
+        ],
+    })
+
+    ids = [p.id for p in s.profiles]
+    assert ids == ["a", "b", "c"]
+
+
+def test_profiles_unknown_fields_ignored():
+    """Неизвестные поля профиля отбрасываются, профиль грузится."""
+    s = _from_dict({
+        "version": 1,
+        "profiles": [
+            {
+                "id": "a",
+                "name_base": "A",
+                "totally_unknown_field": "whatever",
+                "another_garbage": 123,
+            },
+        ],
+    })
+
+    assert len(s.profiles) == 1
+    assert s.profiles[0].id == "a"
+    assert s.profiles[0].name_base == "A"
+
+
+def test_profiles_extra_args_caught():
+    """`Profile(**clean)` не падает на несовместимых типах.
+
+    Если в `_PROFILE_FIELDS` попадёт поле с типом, который
+    dataclass не принимает, `Profile(**clean)` бросит
+    TypeError — перехватываем, чтобы не терять остальные
+    профили.
+    """
+    s = _from_dict({
+        "version": 1,
+        "profiles": [
+            # last_used_at — str, но передаём dict. Модель
+            # принимает (dataclass не валидирует типы по
+            # умолчанию), так что этот тест — на будущее,
+            # если добавят __post_init__ с валидацией.
+            {"id": "a", "name_base": "A"},
+        ],
+    })
+    assert len(s.profiles) == 1

@@ -35,8 +35,7 @@ def _make_profile(tmp_path: Path, name: str = "p") -> Profile:
     """Профиль для тестов монитора.
 
     Флаги уведомлений включаем явно: тесты проверяют работу
-    монитора, а не дефолты модели `Profile`. Дефолты (`False`)
-    меняются отдельно и не должны ломать эти сценарии.
+    монитора, а не дефолты модели `Profile`.
     """
     src = tmp_path / f"src_{name}"
     dst = tmp_path / f"dst_{name}"
@@ -518,82 +517,3 @@ def test_text_added_after_template_shown(tmp_path):
     n = notifier.notifications[0]
     assert "Сборка готова" in n.body
     assert n.open_path == str(message)
-
-
-# --- Периодическая проверка ---
-
-def test_periodic_copy_triggered(tmp_path):
-    """Профиль с check_periodically: при изменениях вызывается
-    колбэк копирования, даже если уведомления выключены."""
-    profile = _make_profile(tmp_path)
-    profile.check_periodically = True
-    profile.notify_on_changes = False
-
-    _write(Path(profile.source) / "a.txt", "aaa")
-
-    copies = []
-    notifier = RecordingNotifier()
-    service = MonitorService(
-        notifier=notifier,
-        store=MonitorStore(tmp_path / "state"),
-        on_periodic_copy=lambda p: copies.append(p.id),
-    )
-    service.configure([profile], AppSettings())
-    service.run_once()  # база
-
-    _write(Path(profile.source) / "b.txt", "bbb")
-    result = service.run_once()
-
-    assert result.with_changes == 0
-    assert notifier.notifications == []
-    assert len(copies) == 1
-    assert copies[0] == profile.id
-
-
-def test_periodic_copy_not_triggered_if_no_changes(tmp_path):
-    """Если изменений нет — колбэк не вызывается."""
-    profile = _make_profile(tmp_path)
-    profile.check_periodically = True
-    profile.notify_on_changes = False
-
-    _write(Path(profile.source) / "a.txt", "aaa")
-
-    copies = []
-    notifier = RecordingNotifier()
-    service = MonitorService(
-        notifier=notifier,
-        store=MonitorStore(tmp_path / "state"),
-        on_periodic_copy=lambda p: copies.append(p.id),
-    )
-    service.configure([profile], AppSettings())
-    service.run_once()  # база
-
-    service.run_once()  # без изменений
-
-    assert len(copies) == 0
-
-
-def test_periodic_copy_and_notification(tmp_path):
-    """Если включены и уведомления, и периодическая проверка —
-    выполняются оба действия."""
-    profile = _make_profile(tmp_path)
-    profile.check_periodically = True
-    profile.notify_on_changes = True
-
-    _write(Path(profile.source) / "a.txt", "aaa")
-
-    copies = []
-    notifier = RecordingNotifier()
-    service = MonitorService(
-        notifier=notifier,
-        store=MonitorStore(tmp_path / "state"),
-        on_periodic_copy=lambda p: copies.append(p.id),
-    )
-    service.configure([profile], AppSettings())
-    service.run_once()  # база
-
-    _write(Path(profile.source) / "b.txt", "bbb")
-    service.run_once()
-
-    assert len(copies) == 1
-    assert len(notifier.notifications) == 1

@@ -1,5 +1,15 @@
 """Предварительная проверка для режима зеркала.
 
+`is_reparse_point` — общий детектор junction/symlink для всех
+обходов (copy, mirror, state_scanner). Использует
+`stat(follow_symlinks=False)` (эквивалент `lstat`): обычный
+`stat()` на Windows следует по reparse point'у и возвращает
+атрибуты цели, а не самого линка, поэтому
+`FILE_ATTRIBUTE_REPARSE_POINT` в нём не выставляется. Без
+этого фильтр `dirs[:]` пропускал junction, copy копировал его
+содержимое — а `state_after` (через `list_user_files`) — нет,
+и destination расходился с ожидаемым состоянием.
+
 Поддержка длинных путей: walk и stat через long_io.
 """
 
@@ -19,10 +29,22 @@ _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
 
 def is_reparse_point(path: str) -> bool:
+    """True, если path — reparse point (junction, symlink, ...).
+
+    `stat(follow_symlinks=False)` — эквивалент `lstat`:
+    возвращает атрибуты самого линка, а не цели. Именно
+    на них выставляется `FILE_ATTRIBUTE_REPARSE_POINT`.
+
+    Обычный `stat()` здесь не работает: на Windows он
+    разрешает reparse point и отдаёт атрибуты цели — флага
+    в них нет. Без `follow_symlinks=False` функция всегда
+    возвращала False, и все обходы (copy, mirror, scanner)
+    заходили внутрь junction.
+    """
     try:
-        st = long_io.stat(path)
+        st = long_io.stat(path, follow_symlinks=False)
     except OSError as exc:
-        logger.debug("stat %s: %r", path, exc)
+        logger.debug("lstat %s: %r", path, exc)
         return False
     attrs = getattr(st, "st_file_attributes", 0)
     return bool(attrs & _FILE_ATTRIBUTE_REPARSE_POINT)

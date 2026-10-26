@@ -43,7 +43,6 @@ _PROFILE_FIELDS = {
     "create_backup_warned",
     "run_after_copy",
     "check_on_startup",
-    "check_periodically",
     "mirror_mode",
     "notify_on_changes",
     "notify_on_message",
@@ -156,12 +155,42 @@ def _to_dict(s: AppSettings) -> dict:
 
 def _from_dict(data: dict) -> AppSettings:
     profiles: list[Profile] = []
-    for raw in data.get("profiles", []):
+    raw_profiles = data.get("profiles", [])
+
+    # profiles может оказаться чем угодно: ручная правка JSON,
+    # баг прошлой версии, повреждённая запись DPAPI. Если
+    # элемент — не словарь, `raw.items()` бросит
+    # AttributeError, и весь settings.dat вернётся к дефолтам
+    # (`load_settings` ловит исключение и отдаёт AppSettings()).
+    # Одна кривая запись не должна ронять все настройки.
+    if not isinstance(raw_profiles, list):
+        logger.warning(
+            "settings.dat: profiles не список (%s) — пропущен",
+            type(raw_profiles).__name__,
+        )
+        raw_profiles = []
+
+    for idx, raw in enumerate(raw_profiles):
+        if not isinstance(raw, dict):
+            logger.warning(
+                "settings.dat: profiles[%d] не словарь (%s) — "
+                "пропущен",
+                idx, type(raw).__name__,
+            )
+            continue
         clean = {
             k: v for k, v in raw.items()
             if k in _PROFILE_FIELDS
         }
-        profiles.append(Profile(**clean))
+        try:
+            profiles.append(Profile(**clean))
+        except TypeError as exc:
+            # Несовместимые типы/неожиданный аргумент — тоже
+            # не повод терять остальные профили.
+            logger.warning(
+                "settings.dat: profiles[%d] не загружен: %r",
+                idx, exc,
+            )
 
     def _int(value, default: int, min_v: int = 1) -> int:
         try:

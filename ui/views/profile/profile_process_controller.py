@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from core import long_io
 from core.models import Profile
-from core.paths import ensure_directory
+from core.paths import ensure_directory, to_long_path
 from core.settings_store import save_settings
 from services.copy.copy_service import (
     PHASE_SAVE_SCAN,
@@ -179,7 +180,8 @@ class ProfileProcessController:
             )
             return
 
-        if not Path(full).is_file():
+        # long_io.isfile понимает `\\?\`; Path.is_file — нет.
+        if not long_io.isfile(to_long_path(full)):
             show_error(
                 self._window,
                 "Нельзя запустить приложение",

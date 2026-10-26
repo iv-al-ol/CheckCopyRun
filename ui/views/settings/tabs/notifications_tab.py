@@ -1,11 +1,11 @@
-"""Вкладка «Уведомления»: каналы, автозакрытие.
+"""Вкладка «Уведомления»: каналы, автозакрытие, интервал опроса.
 
 Мастер-чекбокс «Включить уведомления» стоит отдельно, над
 рамкой: он управляет группой, но сам в неё не входит.
 Все зависимые параметры собраны в **одну** рамку с тонкой
 границей (`SURFACE_BORDER`), у каждого — короткое пояснение.
 
-Строки с полем ввода (автозакрытие) — отдельные
+Строки с полем ввода (автозакрытие, интервал) — отдельные
 горизонтальные фреймы внутри рамки: поле прижато к тексту
 своего параметра, а не выравнивается по соседям через grid.
 Примечание под параметром растягивается на всю ширину.
@@ -19,6 +19,8 @@ from __future__ import annotations
 import customtkinter as ctk
 
 from config.constants import (
+    MONITOR_INTERVAL_MAX,
+    MONITOR_INTERVAL_MIN,
     NOTIFY_AUTO_CLOSE_MAX,
     NOTIFY_AUTO_CLOSE_MIN,
 )
@@ -199,6 +201,41 @@ class NotificationsTab(SettingsTab):
             f"0 — уведомление остаётся до клика по нему. "
             f"Максимум — {NOTIFY_AUTO_CLOSE_MAX} секунд.",
         )
+        row += 1
+
+        # --- Частота опроса: одна горизонтальная строка ---
+        interval_row = ctk.CTkFrame(inner, fg_color="transparent")
+        interval_row.grid(
+            row=row, column=0, sticky="w",
+            padx=_ITEM_PADX, pady=HintLabel.item_pady(),
+        )
+
+        self._add_label(interval_row, "Проверять каждые").pack(
+            side="left",
+        )
+
+        self._interval_entry = ctk.CTkEntry(
+            interval_row, width=_ENTRY_WIDTH,
+        )
+        self._interval_entry.pack(side="left", padx=(8, 6))
+        self._interval_entry.bind(
+            "<Return>", self._on_interval_commit,
+        )
+        self._interval_entry.bind(
+            "<FocusOut>", self._on_interval_commit,
+        )
+
+        self._add_label(interval_row, "мин.").pack(side="left")
+        row += 1
+
+        self._hint(
+            row,
+            f"От {MONITOR_INTERVAL_MIN} до {MONITOR_INTERVAL_MAX} мин. "
+            "Опрос читает только метаданные файлов (размер и "
+            "время изменения), содержимое не читается. Для "
+            "больших папок на сетевом диске рекомендуется "
+            "интервал не меньше 5 минут.",
+        )
 
     def _hint(self, row: int, text: str) -> None:
         """Примечание под параметром, во всю ширину колонки."""
@@ -228,12 +265,12 @@ class NotificationsTab(SettingsTab):
         self._changes_var.set(bool(s.notify_source_changes))
         self._message_var.set(bool(s.notify_message))
         self._aggregate_var.set(bool(s.notify_aggregate))
-
         self._auto_close_entry.delete(0, "end")
         self._auto_close_entry.insert(
             0, str(s.notify_auto_close_sec),
         )
-
+        self._interval_entry.delete(0, "end")
+        self._interval_entry.insert(0, str(s.monitor_interval_min))
         self._apply_enabled_state()
 
     def on_show(self) -> None:
@@ -247,6 +284,7 @@ class NotificationsTab(SettingsTab):
             widget.configure(state=state)
 
         self._auto_close_entry.configure(state=state)
+        self._interval_entry.configure(state=state)
 
         label_color = (
             _ENABLED_TEXT_COLOR if enabled
@@ -324,3 +362,30 @@ class NotificationsTab(SettingsTab):
         value = self.window.settings.notify_auto_close_sec
         self._auto_close_entry.delete(0, "end")
         self._auto_close_entry.insert(0, str(value))
+
+    def _on_interval_commit(self, _event=None) -> None:
+        raw = self._interval_entry.get().strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            self._restore_interval()
+            self.window.set_status(
+                "Интервал проверки: нужно целое число минут",
+            )
+            return
+
+        clamped = max(
+            MONITOR_INTERVAL_MIN,
+            min(MONITOR_INTERVAL_MAX, value),
+        )
+        self.window.settings.monitor_interval_min = clamped
+        self._restore_interval()
+        self.window.save_settings_now()
+        self.window.set_status(
+            f"Источник будет проверяться каждые {clamped} мин",
+        )
+
+    def _restore_interval(self) -> None:
+        value = self.window.settings.monitor_interval_min
+        self._interval_entry.delete(0, "end")
+        self._interval_entry.insert(0, str(value))

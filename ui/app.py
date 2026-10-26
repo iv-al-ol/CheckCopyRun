@@ -12,8 +12,13 @@ from config.constants import (
     APP_TITLE,
     THEME_DEFAULT,
 )
+from core import long_io
 from core.models import AppSettings, Profile
-from core.paths import ensure_directory, get_asset_path
+from core.paths import (
+    ensure_directory,
+    get_asset_path,
+    to_long_path,
+)
 from core.settings_store import load_settings, save_settings
 from services.cas.backup_cleanup import (
     CleanupPolicy,
@@ -164,7 +169,6 @@ class MainWindow(ctk.CTk):
                 build_fallback_notifier(self._tray),
             ]),
             is_busy=self._is_profile_busy,
-            on_periodic_copy=self._on_periodic_copy,
             scheduler=lambda fn: self.after(0, fn),
         )
         self.monitor.configure(
@@ -538,12 +542,7 @@ class MainWindow(ctk.CTk):
     # --- Мониторинг источника и уведомления ---
 
     def refresh_monitor_config(self) -> None:
-        """Пересинхронизирует монитор с текущими настройками.
-
-        Вызывается после любого изменения настроек или списка
-        профилей. Монитор либо стартует, либо останавливается —
-        сам он по настройкам не «догадывается».
-        """
+        """Пересинхронизирует монитор с текущими настройками."""
         monitor = getattr(self, "monitor", None)
         if monitor is None:
             return
@@ -564,12 +563,7 @@ class MainWindow(ctk.CTk):
             )
 
     def _ensure_tray_for_monitor(self) -> None:
-        """Трей нужен как фолбэк, если UI-тост недоступен.
-
-        При штатной работе уведомления показывает собственное
-        окно (`ui/components/toast.py`). Иконка в трее поднимается
-        только для режима «сворачивать в трей» — иначе не нужна.
-        """
+        """Трей нужен как фолбэк, если UI-тост недоступен."""
         if self._tray.is_active:
             return
         if not self.settings.minimize_to_tray:
@@ -578,13 +572,7 @@ class MainWindow(ctk.CTk):
             logger.debug("Трей недоступен")
 
     def _is_profile_busy(self, _profile_id: str) -> bool:
-        """Идёт ли сейчас копирование/восстановление.
-
-        Пока идёт длительная операция, опрос источника
-        пропускается целиком: не мешаем диску и не показываем
-        уведомление о том, что пользователь только что копирует.
-        Следующий цикл подхватит изменения.
-        """
+        """Идёт ли сейчас копирование/восстановление."""
         return (
             self.copy_service.is_running
             or self.restore_service.is_running
@@ -601,10 +589,6 @@ class MainWindow(ctk.CTk):
             logger.debug(
                 "reset_monitor_profile(%r): %r", profile_id, exc,
             )
-
-    def _on_periodic_copy(self, profile: Profile) -> None:
-        """Запускает периодическое копирование по таймеру."""
-        self.after(0, lambda: self.run_with_check(profile.id))
 
     def refresh_main_view(self) -> None:
         view = self.router.get_view("main")
@@ -771,7 +755,8 @@ class MainWindow(ctk.CTk):
             return
 
         full = profile.exe_full_path()
-        if not full or not Path(full).is_file():
+        # long_io.isfile понимает `\\?\`; Path.is_file — нет.
+        if not full or not long_io.isfile(to_long_path(full)):
             self.set_status_progress(
                 f"{copy_text}  ·  Файл приложения не найден",
                 None,
@@ -816,11 +801,7 @@ class MainWindow(ctk.CTk):
     def _on_profile_context(
         self, pids: list[str], x: int, y: int,
     ) -> None:
-        """ПКМ по профилю (или группе выделенных).
-
-        Если выделен один — полное меню действий.
-        Если несколько — только «Удалить N профилей».
-        """
+        """ПКМ по профилю (или группе выделенных)."""
         if not pids:
             return
 

@@ -145,7 +145,6 @@ class ProfileView(BaseView):
             on_backup_toggle=self._on_backup_toggle,
             on_run_after_toggle=self._on_run_after_toggle,
             on_check_on_startup_toggle=self._on_check_on_startup_toggle,
-            on_check_periodically_toggle=self._on_check_periodically_toggle,
             on_mirror_toggle=self._on_mirror_toggle,
             on_notify_changes_toggle=self._on_notify_changes_toggle,
             on_notify_message_toggle=self._on_notify_message_toggle,
@@ -423,7 +422,6 @@ class ProfileView(BaseView):
                 create_backup=True,
                 run_after_copy=False,
                 check_on_startup=False,
-                check_periodically=False,
                 mirror_mode=False,
                 notify_on_changes=False,
                 notify_on_message=False,
@@ -448,7 +446,6 @@ class ProfileView(BaseView):
             create_backup=profile.create_backup,
             run_after_copy=profile.run_after_copy,
             check_on_startup=profile.check_on_startup,
-            check_periodically=profile.check_periodically,
             mirror_mode=profile.mirror_mode,
             notify_on_changes=profile.notify_on_changes,
             notify_on_message=profile.notify_on_message,
@@ -678,20 +675,6 @@ class ProfileView(BaseView):
         state = "включена" if profile.check_on_startup else "выключена"
         self.window.set_status(
             f"Автопроверка при запуске {state}",
-        )
-
-    def _on_check_periodically_toggle(self) -> None:
-        profile = self._profile()
-        if profile is None:
-            return
-        profile.check_periodically = self._form.check_periodically
-        save_settings(self.window.settings)
-        self.window.refresh_monitor_config()
-        state = (
-            "включена" if profile.check_periodically else "выключена"
-        )
-        self.window.set_status(
-            f"Периодическая проверка директории {state}",
         )
 
     def _on_mirror_toggle(self) -> None:

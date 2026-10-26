@@ -11,16 +11,21 @@
 
 Кнопка «Восстановить» — основная (синяя).
 «Удалить» — неактивна для текущего состояния (защита).
+
+Длинные пути Windows (>260): проверка существования
+destination идёт через `long_io.isdir` (понимает префикс `\\?\\`).
+`os.path.isdir` на таких путях всегда возвращал False, и диалог
+показывал «папка не существует», хотя состояния были доступны.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from datetime import datetime
 
 import customtkinter as ctk
 
+from core import long_io
 from services.cas.backup_registry import (
     StateUiInfo,
     compute_ui_info,
@@ -411,7 +416,8 @@ class _BackupListDialog:
             )
             return
 
-        if not os.path.isdir(self._destination):
+        # long_io.isdir понимает `\\?\`; os.path.isdir — нет.
+        if not long_io.isdir(self._destination):
             self._show_message(
                 "Папка назначения не существует:\n"
                 f"{self._destination}\n\n"

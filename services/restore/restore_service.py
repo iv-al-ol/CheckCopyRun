@@ -20,6 +20,17 @@
 Дедупликация устраняет разрастание точек возврата при
 переключениях между резервными копиями без ручных правок:
 цикл A → B → A → B не создаёт ни одного нового state-файла.
+
+Сравнение состояний (`_should_skip`, `find_matching`) идёт
+после нормализации путей через `norm_path`: пути с `/` и `\\`
+считаются одинаковыми. Без этого дедупликация ломалась бы,
+если state-файл отредактирован вручную.
+
+Длинные пути Windows (>260) поддерживаются через `long_io`.
+Валидация destination в `start` тоже использует `long_io.isdir`,
+а не `Path.is_dir`: последний не понимает префикс `\\?\\` и
+всегда возвращал `False`, из-за чего restore на длинных путях
+был недоступен, хотя copy работал.
 """
 
 from __future__ import annotations
@@ -44,6 +55,7 @@ from services.cas.state_store import (
 )
 from services.common.copy_constants import STATE_KIND_RESTORE_POINT
 from services.common.hash_cache import HashCache
+from services.common.path_norm import norm_path
 from services.common.worker_base import WorkerEventsMixin
 from services.restore.restore_apply import apply_plan
 from services.restore.restore_planner import build_plan
@@ -276,15 +288,28 @@ class _RestoreWorker(WorkerEventsMixin, threading.Thread):
     def _should_skip(
         current: StateData, target: StateData | None,
     ) -> bool:
+        r"""Совпадает ли текущее состояние с целевым.
+
+        Сравнение после нормализации путей: `/` и `\` считаются
+        одинаковыми. Без этого `_should_skip` возвращал False
+        для одинаковых состояний с разными разделителями, и
+        restore создавал лишний restore_point (дедупликация
+        проваливалась). `norm_path` даёт одинаковый результат
+        для обоих вариантов.
+        """
         if target is None:
             return False
-        cur = {f.path: f.sha256 for f in current.files}
-        tgt = {f.path: f.sha256 for f in target.files}
+        cur = {
+            norm_path(f.path): f.sha256 for f in current.files
+        }
+        tgt = {
+            norm_path(f.path): f.sha256 for f in target.files
+        }
         if cur != tgt:
             return False
-        return set(current.empty_dirs) == set(
-            target.empty_dirs
-        )
+        cur_empty = {norm_path(p) for p in current.empty_dirs}
+        tgt_empty = {norm_path(p) for p in target.empty_dirs}
+        return cur_empty == tgt_empty
 
     # --- Restore point ---
 
@@ -298,10 +323,6 @@ class _RestoreWorker(WorkerEventsMixin, threading.Thread):
         2. Иначе ищем среди всех states совпадающий —
            переиспользуем.
         3. Иначе создаём новый restore_point.
-
-        Это устраняет «плодятся точки возврата» при
-        переключениях между резервными копиями без ручных
-        правок.
         """
         assert self._state_store is not None
         assert self._current is not None
@@ -467,7 +488,6 @@ class _RestoreWorker(WorkerEventsMixin, threading.Thread):
         )
 
 
-
 # --- Сервис ---
 
 class RestoreService:
@@ -514,8 +534,10 @@ class RestoreService:
                     "Не указано состояние или папка назначения",
                 )
 
-            dst = Path(destination)
-            if not dst.is_dir():
+            # long_io.isdir понимает префикс `\\?\`, Path.is_dir —
+            # нет. Без этого restore на длинных путях был
+            # недоступен, хотя copy на тех же путях работал.
+            if not long_io.isdir(to_long_path(destination)):
                 return self._fail(
                     on_error,
                     "Папка назначения не найдена: "

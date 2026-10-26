@@ -1,7 +1,13 @@
-"""Хранилище состояний destination.
+r"""Хранилище состояний destination.
 
 Каждое состояние — JSON-файл в <destination>/!CCRun/states/:
   state_<YYYY.MM.DD_HH.MM.SS.mmm>.json
+
+`find_matching` сравнивает наборы «путь → sha256» и empty_dirs
+после нормализации через `norm_path`: пути с `/` и `\` считаются
+одинаковыми. Без этого дедупликация ломалась, если state-файл
+отредактирован вручную или пришёл с другой ОС — появлялись
+дубликаты `state_*.json`, и CAS-хранилище раздувалось.
 
 Поддержка длинных путей Windows: все I/O через long_io.
 """
@@ -23,6 +29,7 @@ from services.common.copy_constants import (
     STATES_DIR_NAME,
     TMP_SUFFIX,
 )
+from services.common.path_norm import norm_path
 from services.common.time_utils import now_iso
 from utils.logger import get_logger
 
@@ -50,8 +57,6 @@ _STATE_RE = re.compile(
     r"(?:_(\d+))?"
     r"\.json$"
 )
-
-
 
 
 # --- Модели ---
@@ -249,15 +254,22 @@ class StateStore:
         *,
         exclude_kinds: set[str] | None = None,
     ) -> str | None:
-        """Имя состояния с идентичным содержимым или None.
+        r"""Имя состояния с идентичным содержимым или None.
 
-        Сравниваются наборы «путь → sha256» и пустые директории.
+        Сравниваются наборы «путь → sha256» и пустые директории
+        после нормализации через `norm_path`: пути с `/` и `\`
+        считаются одинаковыми. Без этого дедупликация ломалась,
+        если state-файл отредактирован вручную или сгенерирован
+        на другой ОС.
+
         `exclude_kinds` отбрасывает состояния по kind (например,
         точки возврата). Раньше логика дублировалась в
         copy_service и restore_service.
         """
-        data_files = {f.path: f.sha256 for f in data.files}
-        data_empty = set(data.empty_dirs)
+        data_files = {
+            norm_path(f.path): f.sha256 for f in data.files
+        }
+        data_empty = {norm_path(p) for p in data.empty_dirs}
         n_files = len(data.files)
         n_empty = len(data.empty_dirs)
         skip_kinds = exclude_kinds or set()
@@ -284,11 +296,15 @@ class StateStore:
                 )
                 continue
             cand_files = {
-                f.path: f.sha256 for f in candidate.files
+                norm_path(f.path): f.sha256
+                for f in candidate.files
             }
             if cand_files != data_files:
                 continue
-            if set(candidate.empty_dirs) != data_empty:
+            cand_empty = {
+                norm_path(p) for p in candidate.empty_dirs
+            }
+            if cand_empty != data_empty:
                 continue
             return info.path.name
         return None

@@ -1,4 +1,4 @@
-"""Сервис копирования файлов с CAS-состояниями, mirror и
+r"""Сервис копирования файлов с CAS-состояниями, mirror и
 автооткатом при отмене.
 
 Фазы прогресса:
@@ -8,6 +8,16 @@
 
 Дедупликация состояний: state_before/state_after переиспользуют
 существующий state-файл с идентичным содержимым.
+
+Reparse points (junction/symlink) в source не обходятся:
+содержимое может вести куда угодно (в т.ч. рекурсивно в себя),
+а `list_user_files` и mirror их тоже пропускают. Без этого
+copy копировал бы содержимое junction, а state_after — нет,
+и destination разошёлся бы с ожидаемым состоянием.
+
+Сравнение состояний (`_states_equal`, `find_matching`) идёт
+после нормализации путей через `norm_path`: `/` и `\`
+считаются одинаковыми.
 
 Поддержка длинных путей Windows: I/O через long_io.
 """
@@ -51,6 +61,7 @@ from services.common.copy_errors import (
     CopyValidationError,
 )
 from services.common.hash_cache import HashCache, hash_file
+from services.common.path_norm import norm_path
 from services.common.worker_base import WorkerEventsMixin
 from services.copy.file_compare import (
     ComparisonResult,
@@ -335,6 +346,20 @@ class _CopyWorker(WorkerEventsMixin, threading.Thread):
         self._emit_done()
 
     def _collect_files(self) -> list[str]:
+        """Список файлов source для копирования.
+
+        Reparse points (junction/symlink) не обходятся на любом
+        уровне: содержимое может вести куда угодно (в т.ч.
+        рекурсивно в себя), а `list_user_files` и mirror их
+        тоже пропускают. Фильтр `dirs[:]` срабатывает ДО того,
+        как `os.walk` зайдёт в директорию — её содержимое не
+        читается вообще. Без этого copy копировал бы содержимое
+        junction, а state_after — нет, и destination разошёлся
+        бы с ожидаемым состоянием.
+
+        `!CCRun` в корне source исключается
+        (`is_special_first_segment`), как и везде.
+        """
         result: list[str] = []
         top = to_long_path(self._source)
         for root, dirs, names in long_io.walk(top):
@@ -344,6 +369,12 @@ class _CopyWorker(WorkerEventsMixin, threading.Thread):
                     d for d in dirs
                     if not is_special_first_segment(d)
                 ]
+            dirs[:] = [
+                d for d in dirs
+                if not is_reparse_point(
+                    os.path.join(root, d)
+                )
+            ]
             for name in names:
                 full = os.path.join(root, name)
                 rel = os.path.relpath(full, top)
@@ -666,13 +697,26 @@ class _CopyWorker(WorkerEventsMixin, threading.Thread):
     def _states_equal(
         a: StateData, b: StateData | None,
     ) -> bool:
+        """Совпадают ли два состояния.
+
+        Сравнение после нормализации путей: `/` и `\\`
+        считаются одинаковыми. Без этого state_before не
+        распознавал «то же состояние» с разными разделителями
+        и создавал дубликат.
+        """
         if b is None:
             return False
-        a_files = {f.path: f.sha256 for f in a.files}
-        b_files = {f.path: f.sha256 for f in b.files}
+        a_files = {
+            norm_path(f.path): f.sha256 for f in a.files
+        }
+        b_files = {
+            norm_path(f.path): f.sha256 for f in b.files
+        }
         if a_files != b_files:
             return False
-        return set(a.empty_dirs) == set(b.empty_dirs)
+        a_empty = {norm_path(p) for p in a.empty_dirs}
+        b_empty = {norm_path(p) for p in b.empty_dirs}
+        return a_empty == b_empty
 
     def _find_new_blobs(
         self, data: StateData,
@@ -1030,8 +1074,6 @@ class CopyService:
                 logger.warning(
                     "Копирование не запущено: %s", exc,
                 )
-                # Значение фиксируем: имя exc удаляется при выходе
-                # из блока except, а лямбда вызывается отложенно.
                 error_message = str(exc)
                 try:
                     self._scheduler(lambda: on_error(error_message))

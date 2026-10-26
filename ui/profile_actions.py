@@ -4,8 +4,8 @@
 Контроллер работает с settings, sidebar и диалогами; сам не
 рисует никакого UI.
 
-При смене иконки и удалении профилей вызывается очистка PNG,
-на которые больше не ссылается ни один профиль.
+Проверки существования exe — через `long_io`: на длинных путях
+`Path.is_file()` даёт ложный False и иконка не извлекается.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from config.constants import DEFAULT_PROFILE_NAME_PREFIX
+from core import long_io
 from core.models import Profile
 from core.settings_store import save_settings
 from services.system.icon_cleanup import cleanup_unused_icons
@@ -131,10 +132,7 @@ class ProfileActionController:
     # --- Удаление (одиночное и массовое) ---
 
     def delete_many(self, pids: list[str]) -> None:
-        """Удалить набор профилей после одного подтверждения.
-
-        Один диалог, одно сохранение настроек, один refresh.
-        """
+        """Удалить набор профилей после одного подтверждения."""
         if not pids:
             return
 
@@ -184,13 +182,16 @@ class ProfileActionController:
     # --- Вспомогательное ---
 
     def resolve_exe_path(self, profile: Profile) -> Path | None:
+        """Путь к exe профиля, если файл существует.
+
+        long_io.isfile понимает `\\?\\`; Path.is_file — нет.
+        """
         full = profile.exe_source_path()
         if not full:
             return None
-        p = Path(full)
-        if not p.is_file():
+        if not long_io.isfile(full):
             return None
-        return p
+        return Path(full)
 
     def _reload_view_if_open(self, pid: str) -> None:
         if self._window.active_profile_id != pid:

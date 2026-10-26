@@ -163,3 +163,60 @@ def test_kind_restore_point(tmp_path):
     info = store.latest()
     assert info is not None
     assert info.kind == STATE_KIND_RESTORE_POINT
+
+
+def test_find_matching_mixed_separators(tmp_path):
+    """find_matching не различает / и \\ в путях.
+
+    Регресс-тест: раньше дедупликация ломалась, если
+    state-файл отредактирован вручную или пришёл с другой ОС —
+    создавался дубликат state_*.json.
+    """
+    store = StateStore(str(tmp_path))
+    data_a = StateData(
+        version=STATE_VERSION,
+        created_at=now_iso(),
+        kind=STATE_KIND_AUTO,
+        source="",
+        files=[
+            StateFile(
+                path="sub/a.txt",
+                sha256="aa" * 32,
+                size=1, mtime="",
+            ),
+        ],
+        empty_dirs=["empty/dir"],
+        summary={
+            "files_count": 1,
+            "empty_dirs_count": 1,
+            "total_size": 1,
+            "new_blobs_count": 0,
+            "new_blobs_bytes": 0,
+        },
+    )
+    name_a = store.create(data_a).name
+
+    data_b = StateData(
+        version=STATE_VERSION,
+        created_at=now_iso(),
+        kind=STATE_KIND_AUTO,
+        source="",
+        files=[
+            StateFile(
+                path="sub\\a.txt",
+                sha256="aa" * 32,
+                size=1, mtime="",
+            ),
+        ],
+        empty_dirs=["empty\\dir"],
+        summary={
+            "files_count": 1,
+            "empty_dirs_count": 1,
+            "total_size": 1,
+            "new_blobs_count": 0,
+            "new_blobs_bytes": 0,
+        },
+    )
+
+    found = store.find_matching(data_b)
+    assert found == name_a

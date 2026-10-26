@@ -417,3 +417,35 @@ def test_restore_point_creates_when_manual_edit(
 
     assert r.reused_restore_point is False
     assert len(StateStore(str(dst)).list()) == states_before + 1
+
+
+def test_should_skip_mixed_separators():
+    """_should_skip не различает / и \\ в путях."""
+    from services.cas.state_store import (
+        StateData,
+        StateFile,
+    )
+    from services.restore.restore_service import _RestoreWorker
+
+    a = StateData(
+        files=[
+            StateFile(
+                path="sub/a.txt",
+                sha256="aa" * 32,
+                size=1, mtime="",
+            ),
+        ],
+        empty_dirs=["empty/dir"],
+    )
+    b = StateData(
+        files=[
+            StateFile(
+                path="sub\\a.txt",
+                sha256="aa" * 32,
+                size=1, mtime="",
+            ),
+        ],
+        empty_dirs=["empty\\dir"],
+    )
+
+    assert _RestoreWorker._should_skip(a, b) is True

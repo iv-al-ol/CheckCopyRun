@@ -13,6 +13,7 @@ from config.constants import (
     NOTIFY_AUTO_CLOSE_DEFAULT,
     THEME_DEFAULT,
 )
+from core import long_io
 
 
 def _new_id() -> str:
@@ -21,7 +22,14 @@ def _new_id() -> str:
 
 @dataclass
 class Profile:
-    """Один профиль копирования/запуска."""
+    """Один профиль копирования/запуска.
+
+    Файловые проверки (`has_*`, `can_*`) используют `long_io`:
+    `os.path.*` не понимает префикс `\\?\\` и на путях
+    ≥ 260 символов всегда возвращает False. Без этого кнопка
+    «Запустить приложение» была недоступна для длинных путей,
+    хотя копирование работало.
+    """
 
     id: str = field(default_factory=_new_id)
 
@@ -41,7 +49,6 @@ class Profile:
 
     run_after_copy: bool = False
     check_on_startup: bool = False
-    check_periodically: bool = False
 
     mirror_mode: bool = False
 
@@ -84,27 +91,35 @@ class Profile:
         return os.path.join(self.destination, self.exe_relative)
 
     def has_source_and_dest(self) -> bool:
+        """Обе директории заданы и существуют."""
         if not (self.source and self.destination):
             return False
         return (
-            os.path.isdir(self.source)
-            and os.path.isdir(self.destination)
+            long_io.isdir(self.source)
+            and long_io.isdir(self.destination)
         )
 
     def can_copy(self) -> bool:
-        if not self.source or not os.path.isdir(self.source):
+        """Можно ли запускать копирование.
+
+        Source существует, destination задан (не обязан
+        существовать — copy его создаст).
+        """
+        if not self.source or not long_io.isdir(self.source):
             return False
         if not self.destination:
             return False
         return True
 
     def has_exe_in_source(self) -> bool:
+        """Запускаемый файл существует в папке-источнике."""
         path = self.exe_source_path()
-        return bool(path) and os.path.isfile(path)
+        return bool(path) and long_io.isfile(path)
 
     def has_exe_in_destination(self) -> bool:
+        """Запускаемый файл существует в папке назначения."""
         path = self.exe_full_path()
-        return bool(path) and os.path.isfile(path)
+        return bool(path) and long_io.isfile(path)
 
     def can_run(self) -> bool:
         return (
@@ -142,10 +157,8 @@ class AppSettings:
 
     # Политика хранения состояний. «Хранить последние N»
     # включено по умолчанию: без неё CAS-хранилище растёт
-    # бесконтрольно (каждое копирование с изменениями создаёт
-    # новое состояние). «Удалять старше N дней» оставлено
-    # выключенным — это агрессивнее, может снести единственную
-    # копию какого-то файла.
+    # бесконтрольно. «Удалять старше N дней» оставлено
+    # выключенным — это агрессивнее.
     backup_keep_last_enabled: bool = True
     backup_keep_last_n: int = 10
     backup_delete_older_enabled: bool = False
